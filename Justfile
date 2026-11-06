@@ -97,6 +97,10 @@ EOF
     cargo build --release -p honk-core --no-default-features \
         --features "clash-api,native-api,ebpf,rprx" \
         --target aarch64-linux-android
+    if readelf -d target/aarch64-linux-android/release/honk-core | grep -Fq 'libc++_shared.so'; then
+        echo 'Android binary unexpectedly depends on libc++_shared.so; use the static NDK STL' >&2
+        exit 1
+    fi
     echo "Binary: target/aarch64-linux-android/release/honk-core"
 
 # Build eBPF object standalone (optional; honk-core build.rs auto-builds it)
