@@ -1236,7 +1236,7 @@ fn packet_info_from_cmsg(
             unsafe { std::ptr::read_unaligned(data.as_ptr().cast::<libc::in6_pktinfo>()) };
         return Some((
             std::net::IpAddr::V6(std::net::Ipv6Addr::from(pktinfo.ipi6_addr.s6_addr)),
-            u32::try_from(pktinfo.ipi6_ifindex).ok()?,
+            u32::try_from(u64::from(pktinfo.ipi6_ifindex)).ok()?,
         ));
     }
     None

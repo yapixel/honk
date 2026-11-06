@@ -342,16 +342,16 @@ pub(crate) fn setup_daens_namespace(tproxy_mark: u32, tproxy_port: u16) -> anyho
 /// Path of the daens network-namespace bind-mount, kept for external
 /// tooling compatibility (`ip netns exec`, debug shells). The engine
 /// itself never depends on it — the namespace is FD-owned (below).
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "ebpf", target_os = "android"))]
 pub(crate) const DAENS_NS_PATH: &str = "/data/adb/honk/netns/daens";
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "ebpf", not(target_os = "android")))]
 pub(crate) const DAENS_NS_PATH: &str = "/var/run/netns/daens";
 
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "ebpf", target_os = "android"))]
 const DAENS_NETNS_DIR: &str = "/data/adb/honk/netns";
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "ebpf", not(target_os = "android")))]
 const DAENS_NETNS_DIR: &str = "/run/netns";
 
 /// Runtime truth for "daens is set up", set by [`setup_daens_namespace`]
