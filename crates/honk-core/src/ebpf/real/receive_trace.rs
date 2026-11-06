@@ -179,7 +179,7 @@ impl ReceiveTrace {
             libc::getsockopt(
                 fd,
                 libc::SOL_SOCKET,
-                libc::SO_COOKIE,
+                57, // Linux SO_COOKIE; Android libc does not expose it.
                 (&mut cookie as *mut u64).cast(),
                 &mut size,
             )

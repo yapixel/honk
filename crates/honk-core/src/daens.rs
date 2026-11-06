@@ -496,7 +496,7 @@ pub(crate) fn daens_netns_cookie() -> anyhow::Result<u64> {
             libc::getsockopt(
                 socket.as_raw_fd(),
                 libc::SOL_SOCKET,
-                libc::SO_NETNS_COOKIE,
+                71, // Linux SO_NETNS_COOKIE; Android libc does not expose it.
                 (&raw mut cookie).cast(),
                 &mut length,
             )

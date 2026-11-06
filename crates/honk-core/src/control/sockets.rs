@@ -2,6 +2,10 @@ use super::*;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const IPV6_ORIGDSTADDR_OPT: libc::c_int = 74;
+// Linux UAPI socket options which Android's libc bindings do not expose.
+// Keep the values local so the Android build can still use kernels that
+// implement the corresponding options.
+const SO_RCVMARK_OPT: libc::c_int = 75;
 #[cfg(all(
     feature = "ebpf",
     feature = "native-api",
@@ -132,10 +136,32 @@ pub(super) fn set_so_mark_zero(fd: &impl std::os::fd::AsFd) -> io::Result<()> {
 }
 
 /// Set SO_MARK, including the configured bypass identity on TPROXY listeners.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 pub(super) fn set_so_mark(fd: &impl std::os::fd::AsFd, mark: u32) -> io::Result<()> {
     nix::sys::socket::setsockopt(fd, nix::sys::socket::sockopt::Mark, &mark)
         .map_err(io::Error::from)
+}
+
+#[cfg(target_os = "android")]
+pub(super) fn set_so_mark(fd: &impl std::os::fd::AsFd, mark: u32) -> io::Result<()> {
+    use std::os::fd::{AsFd as _, AsRawFd as _};
+
+    // SAFETY: the fd is borrowed for this call and the option points to a
+    // live integer with the declared length.
+    let status = unsafe {
+        libc::setsockopt(
+            fd.as_fd().as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_MARK,
+            (&mark as *const u32).cast(),
+            std::mem::size_of_val(&mark) as libc::socklen_t,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -186,7 +212,7 @@ pub(super) fn set_so_recvmark(socket: &Socket) -> io::Result<()> {
         libc::setsockopt(
             socket.as_raw_fd(),
             libc::SOL_SOCKET,
-            libc::SO_RCVMARK,
+            SO_RCVMARK_OPT,
             (&enabled as *const libc::c_int).cast(),
             std::mem::size_of_val(&enabled) as libc::socklen_t,
         )
@@ -640,7 +666,7 @@ fn sendmsg_with_src(
                 (*pktinfo).ipi6_addr = libc::in6_addr {
                     s6_addr: ip.octets(),
                 };
-                (*pktinfo).ipi6_ifindex = src_ifindex;
+                (*pktinfo).ipi6_ifindex = src_ifindex as _;
             }
         }
         let n = libc::sendmsg(fd, &msg, libc::MSG_DONTWAIT);
@@ -1210,7 +1236,7 @@ fn packet_info_from_cmsg(
             unsafe { std::ptr::read_unaligned(data.as_ptr().cast::<libc::in6_pktinfo>()) };
         return Some((
             std::net::IpAddr::V6(std::net::Ipv6Addr::from(pktinfo.ipi6_addr.s6_addr)),
-            pktinfo.ipi6_ifindex,
+            u32::try_from(pktinfo.ipi6_ifindex).ok()?,
         ));
     }
     None
