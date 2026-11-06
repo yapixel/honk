@@ -71,15 +71,27 @@ build-android:
     host_tag="${ANDROID_NDK_HOST_TAG:-linux-x86_64}"
     toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$host_tag"
     clang="$toolchain/bin/aarch64-linux-android${api}-clang"
+    wrapper="${TMPDIR:-/tmp}/honk-android-toolchain.$$.cmake"
+    trap 'rm -f "$wrapper"' EXIT
     test -x "$clang" || { echo "missing Android NDK compiler: $clang" >&2; exit 1; }
     command -v rustup >/dev/null || { echo "rustup is required to install the Android Rust target" >&2; exit 1; }
     rustup target list --installed | grep -qx aarch64-linux-android \
         || { echo "install the Rust target first: rustup target add aarch64-linux-android" >&2; exit 1; }
+    cat > "$wrapper" <<EOF
+set(ANDROID_ABI "arm64-v8a" CACHE STRING "" FORCE)
+set(ANDROID_PLATFORM "android-${api}" CACHE STRING "" FORCE)
+set(CMAKE_ANDROID_ARCH_ABI "arm64-v8a" CACHE STRING "" FORCE)
+set(CMAKE_SYSTEM_VERSION ${api} CACHE STRING "" FORCE)
+include("$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake")
+EOF
     CC_aarch64_linux_android="$clang" \
     CXX_aarch64_linux_android="$toolchain/bin/aarch64-linux-android${api}-clang++" \
     AR_aarch64_linux_android="$toolchain/bin/llvm-ar" \
     CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$clang" \
     BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android${api} --sysroot=$toolchain/sysroot" \
+    CMAKE_TOOLCHAIN_FILE="$wrapper" \
+    ANDROID_ABI="arm64-v8a" \
+    ANDROID_PLATFORM="android-${api}" \
     cargo build --release -p honk-core --no-default-features \
         --features "clash-api,native-api,ebpf,rprx" \
         --target aarch64-linux-android
