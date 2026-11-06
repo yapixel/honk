@@ -723,47 +723,38 @@ mod tests {
     #[test]
     fn redirect_peer_requires_netkit_pair() {
         let mac = [0x02, 0, 0, 0, 0, 1];
-        assert!(Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Netkit)
-            .unwrap()
-            .supports_redirect_peer());
-        assert!(!Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Veth)
-            .unwrap()
-            .supports_redirect_peer());
+        assert!(
+            Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Netkit)
+                .unwrap()
+                .supports_redirect_peer()
+        );
+        assert!(
+            !Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Veth)
+                .unwrap()
+                .supports_redirect_peer()
+        );
     }
 
     #[test]
     fn read_links_reports_missing_link_and_zero_mac() {
         let mut nl = netlink::NlSock::new().expect("netlink socket");
-        let missing = Dae0Setup::read_links(
-            &mut nl,
-            "honk-no-such0",
-            "lo",
-            netlink::LinkPairKind::Veth,
-        )
+        let missing =
+            Dae0Setup::read_links(&mut nl, "honk-no-such0", "lo", netlink::LinkPairKind::Veth)
             .expect_err("missing dae0 must fail");
         assert!(
             format!("{missing:#}").contains("honk-no-such0"),
             "{missing:#}"
         );
-        let missing_peer = Dae0Setup::read_links(
-            &mut nl,
-            "lo",
-            "honk-no-such1",
-            netlink::LinkPairKind::Veth,
-        )
+        let missing_peer =
+            Dae0Setup::read_links(&mut nl, "lo", "honk-no-such1", netlink::LinkPairKind::Veth)
             .expect_err("missing dae0peer must fail");
         assert!(
             format!("{missing_peer:#}").contains("honk-no-such1"),
             "{missing_peer:#}"
         );
         // `lo` exists with a nonzero ifindex but an all-zero MAC.
-        let zero_mac = Dae0Setup::read_links(
-            &mut nl,
-            "lo",
-            "lo",
-            netlink::LinkPairKind::Veth,
-        )
-        .expect_err("zero MAC must fail");
+        let zero_mac = Dae0Setup::read_links(&mut nl, "lo", "lo", netlink::LinkPairKind::Veth)
+            .expect_err("zero MAC must fail");
         assert!(format!("{zero_mac:#}").contains("MAC"), "{zero_mac:#}");
     }
 }

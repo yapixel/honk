@@ -173,8 +173,15 @@ where
     #[cfg(target_os = "android")]
     match android_system_resolve(host, deadline).await {
         Ok(Some(addrs)) => return Ok(addrs),
-        Ok(None) => tracing::debug!("Android system resolver returned no addresses for '{}'", host),
-        Err(error) => tracing::debug!("Android system resolver failed for '{}': {}", host, error),
+        Ok(None) => tracing::debug!(
+            "Android system resolver returned no addresses for '{}'",
+            host
+        ),
+        Err(error) => tracing::debug!(
+            "Android system resolver failed for '{}': {}",
+            host,
+            error
+        ),
     }
     let server = system_nameserver().ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "no numeric system DNS nameserver")
@@ -203,7 +210,9 @@ async fn android_system_resolve(
     let addrs = match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, lookup)
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Android system DNS timed out"))??,
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "Android system DNS timed out")
+            })??,
         None => lookup.await?,
     };
     let mut result = Vec::new();

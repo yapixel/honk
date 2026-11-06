@@ -234,8 +234,14 @@ pub struct Cli {
 
     /// Path to configuration file
     #[arg(short, long)]
-    #[cfg_attr(target_os = "android", arg(default_value = "/data/adb/honk/config.dae"))]
-    #[cfg_attr(not(target_os = "android"), arg(default_value = "/etc/honk/config.dae"))]
+    #[cfg_attr(
+        target_os = "android",
+        arg(default_value = "/data/adb/honk/config.dae")
+    )]
+    #[cfg_attr(
+        not(target_os = "android"),
+        arg(default_value = "/etc/honk/config.dae")
+    )]
     pub config: PathBuf,
 
     /// Append operational logs to this path, overriding `global.log_file`
