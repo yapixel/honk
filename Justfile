@@ -82,6 +82,7 @@ set(ANDROID_ABI "arm64-v8a" CACHE STRING "" FORCE)
 set(ANDROID_PLATFORM "android-${api}" CACHE STRING "" FORCE)
 set(CMAKE_ANDROID_ARCH_ABI "arm64-v8a" CACHE STRING "" FORCE)
 set(CMAKE_SYSTEM_VERSION ${api} CACHE STRING "" FORCE)
+set(CMAKE_ANDROID_STL_TYPE "c++_static" CACHE STRING "" FORCE)
 include("$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake")
 EOF
     CC_aarch64_linux_android="$clang" \
