@@ -191,7 +191,7 @@ static DESCRIPTORS: &[ProtocolDescriptor] = &[
     },
     ProtocolDescriptor {
         protocol: NodeProtocol::Snell,
-        supports_udp: never,
+        supports_udp: network_allows_udp,
         pool_ready_streams: never,
         pool_bare_tcp: always,
         supports_warm: no_warm,
@@ -376,6 +376,24 @@ mod tests {
         let ss = descriptor(NodeProtocol::SS).supports_udp;
         let node = Node::default();
         assert!(ss(&node), "SS UDP is not network-gated");
+
+        let snell = descriptor(NodeProtocol::Snell).supports_udp;
+        let snell_tcp_only = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                network: Some("tcp".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!snell(&snell_tcp_only));
+        let snell_udp = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                network: Some("tcp,udp".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(snell(&snell_udp));
     }
 
     #[test]

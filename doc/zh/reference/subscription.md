@@ -242,7 +242,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | Hysteria2 | `password`/`auth`，以及 `obfs: salamander` 与 `obfs-password`。支持上传/下载带宽、`ports`/`mport` 跳跃端口范围、`hop-interval`/`mhop`、接收窗口、MTU 与 MTU 发现设置。 |
 | TUIC | UUID/密码、拥塞控制、ALPN、接收窗口、MTU。 |
 | AnyTLS | `idle-session-check-interval`、`idle-session-timeout`、`min-idle-session`。 |
-| Snell | `psk`、整数 `version`（3–6，默认 4）、v6 `mode`。拒绝 `reuse: true` 与启用的 `obfs-opts`；`udp: true` 时节点仅以 TCP 导入。 |
+| Snell | `psk`、整数 `version`（3–6，默认 4）、v6 `mode`。拒绝 `reuse: true` 与启用的 `obfs-opts`；`udp` 映射为数据包转发能力（true -> tcp,udp，false -> tcp）。 |
 
 显式关闭的功能块按禁用处理，不会误判为启用未支持功能。原生支持 UDP 的协议接受 `udp: true`；VMess 没有 UDP 路径，该声明会被忽略，节点仍按 TCP 导入。节点模型无法保留显式 UDP 限制时会拒绝导入。
 

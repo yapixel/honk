@@ -142,7 +142,7 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `anytls_idle_session_check_interval` | u64? | null | Parsed `idle_session_check_interval` seconds; current runtime janitor cadence remains fixed at 30 s |
 | `anytls_idle_session_timeout` | u64? | null | Idle eviction from `idle_session_timeout`; effective default 30 s |
 | `snell_psk` | string? | null | Snell pre-shared key; flat alias of `password` |
-| `snell_version` | u8? | null | Snell protocol version 3–6; effective default 4 (v5 uses the v4 TCP wire). TCP only: Snell UDP, connection reuse and obfs are unsupported |
+| `snell_version` | u8? | null | Snell protocol version 3–6; effective default 4 (v5 uses the v4 TCP wire). UDP is supported over TCP (connection reuse and obfs still unsupported); `network` gates UDP like AnyTLS |
 | `snell_mode` | string? | null | Snell v6 record framing `default`, `unshaped` or `unsafe-raw`; only valid with version 6, effective default `default` |
 | `mark` | u32? | null | Structured-model outbound `SO_MARK`; not a dae share-link query |
 | `tags` | string[] | `[]` | Classification metadata; not a dae share-link query |

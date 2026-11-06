@@ -248,6 +248,7 @@ pub struct SnellConfig {
     pub psk: Option<String>,
     pub version: Option<u8>,
     pub mode: Option<String>,
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -365,6 +366,7 @@ impl OutboundConfig {
             Self::Vmess(config) => config.network.as_deref(),
             Self::Vless(config) => config.network.as_deref(),
             Self::AnyTls(config) => config.network.as_deref(),
+            Self::Snell(config) => config.network.as_deref(),
             _ => None,
         }
     }

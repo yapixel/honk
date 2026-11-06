@@ -142,7 +142,7 @@ Node 模型包含下列字段。分享链接从协议方案、用户信息、地
 | `anytls_idle_session_check_interval` | u64? | null | 解析后的 `idle_session_check_interval` 秒数；当前运行时 janitor 周期仍固定为 30 秒 |
 | `anytls_idle_session_timeout` | u64? | null | 来自 `idle_session_timeout` 的空闲驱逐；有效默认值 30 秒 |
 | `snell_psk` | string? | null | Snell 预共享密钥；`password` 的扁平别名 |
-| `snell_version` | u8? | null | Snell 协议版本 3–6；有效默认值 4（v5 使用 v4 TCP 线格式）。仅支持 TCP：不支持 Snell UDP、连接复用与 obfs |
+| `snell_version` | u8? | null | Snell 协议版本 3–6；有效默认值 4（v5 使用 v4 TCP 线格式）。支持通过 TCP 进行 UDP 转发（连接复用与 obfs 仍不支持）；`network` 如 AnyTLS 一样控制 UDP 能力 |
 | `snell_mode` | string? | null | Snell v6 记录分帧 `default`、`unshaped` 或 `unsafe-raw`；仅在版本 6 时有效，有效默认值 `default` |
 | `mark` | u32? | null | 结构化模型中的出站 `SO_MARK`；不是 dae 分享链接查询参数 |
 | `tags` | string[] | `[]` | 分类元数据；不是 dae 分享链接查询参数 |

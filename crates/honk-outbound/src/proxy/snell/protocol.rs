@@ -19,8 +19,8 @@ use std::task::{Context, Poll, Waker};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::v3::{V3Conn, is_zero_chunk as is_v3_zero_chunk};
-use super::v4::{V4Conn, is_zero_chunk as is_v4_zero_chunk};
-use super::v6::{V6Codec, V6Conn};
+use super::v4::{MAX_PAYLOAD_LENGTH, V4Conn, is_zero_chunk as is_v4_zero_chunk};
+use super::v6::{MAX_RECORD_PAYLOAD as V6_MAX_RECORD_PAYLOAD, V6Codec, V6Conn};
 
 /// First byte of every Snell request — `0x01` since v1.
 pub const HEADER_VERSION: u8 = 1;
@@ -28,6 +28,9 @@ pub const HEADER_VERSION: u8 = 1;
 pub const COMMAND_CONNECT: u8 = 1;
 /// Reuse-capable TCP connect; used when the client maintains a pool or for v6.
 pub const COMMAND_CONNECT_V2: u8 = 5;
+pub const COMMAND_UDP: u8 = 6;
+/// First byte of each UDP-over-TCP request frame.
+pub const COMMAND_UDP_FORWARD: u8 = 1;
 
 pub const RESPONSE_TUNNEL: u8 = 0;
 pub const RESPONSE_PONG: u8 = 1;
@@ -106,6 +109,22 @@ pub async fn write_zero_chunk<W: AsyncWrite + Unpin>(stream: &mut W) -> io::Resu
     stream.flush().await
 }
 
+/// UDP-ASSOCIATE request (empty client ID).
+pub const UDP_REQUEST: [u8; 3] = [HEADER_VERSION, COMMAND_UDP, 0x00];
+
+/// Write a UDP-ASSOCIATE request header.
+pub async fn write_udp_header<W: AsyncWrite + Unpin>(stream: &mut W) -> io::Result<()> {
+    stream.write_all(&UDP_REQUEST).await
+}
+
+/// Cross-poll state for [`Snell::poll_write_packet_frame`]. One instance per
+/// datagram write; caller keeps it alive across `Poll::Pending` returns.
+#[derive(Default)]
+pub struct PacketFrameProgress {
+    staged: bool,
+    written: usize,
+}
+
 // ─── Snell stream wrapper ────────────────────────────────────────────────────
 
 enum SnellInner<S> {
@@ -175,6 +194,9 @@ pub struct Snell<S> {
     /// The current session ended with the peer's zero-chunk. Unlike a raw TCP
     /// EOF, this makes a connection recognize protocol-level half-close.
     peer_half_closed: bool,
+    /// Armed when a packet-frame write starts; cleared only when it runs to
+    /// completion. A dropped mid-write future leaves a torn stream.
+    frame_write_torn: bool,
 }
 
 impl<S: std::fmt::Debug> std::fmt::Debug for Snell<S> {
@@ -183,6 +205,7 @@ impl<S: std::fmt::Debug> std::fmt::Debug for Snell<S> {
             .field("inner", &self.inner)
             .field("reply_consumed", &self.reply_consumed)
             .field("peer_half_closed", &self.peer_half_closed)
+            .field("frame_write_torn", &self.frame_write_torn)
             .finish()
     }
 }
@@ -193,6 +216,7 @@ impl<S> Snell<S> {
             inner: SnellInner::V4(inner),
             reply_consumed: false,
             peer_half_closed: false,
+            frame_write_torn: false,
         }
     }
 
@@ -201,6 +225,7 @@ impl<S> Snell<S> {
             inner: SnellInner::V3(inner),
             reply_consumed: false,
             peer_half_closed: false,
+            frame_write_torn: false,
         }
     }
 
@@ -212,6 +237,7 @@ impl<S> Snell<S> {
             inner: SnellInner::V4(V4Conn::new(inner, psk)),
             reply_consumed: false,
             peer_half_closed: false,
+            frame_write_torn: false,
         }
     }
 
@@ -223,6 +249,7 @@ impl<S> Snell<S> {
             inner: SnellInner::V3(V3Conn::new(inner, psk)),
             reply_consumed: false,
             peer_half_closed: false,
+            frame_write_torn: false,
         }
     }
 
@@ -234,6 +261,7 @@ impl<S> Snell<S> {
             inner: SnellInner::V6(V6Conn::new(inner, psk, codec)),
             reply_consumed: false,
             peer_half_closed: false,
+            frame_write_torn: false,
         }
     }
 
@@ -250,6 +278,160 @@ impl<S> Snell<S> {
                 io::ErrorKind::Unsupported,
                 "snell: deferred requests are v6-only",
             )),
+        }
+    }
+
+    /// Largest datagram frame the codec carries in one record.
+    pub fn max_packet_frame_len(&self) -> usize {
+        match &self.inner {
+            SnellInner::V3(_) | SnellInner::V4(_) => MAX_PAYLOAD_LENGTH,
+            SnellInner::V6(_) => V6_MAX_RECORD_PAYLOAD,
+        }
+    }
+
+    /// Stage a single frame carrying `buf` verbatim as a UDP datagram payload.
+    pub async fn write_packet_frame(&mut self, buf: &[u8]) -> io::Result<usize>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        if buf.len() > self.max_packet_frame_len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snell: packet frame too large",
+            ));
+        }
+        self.begin_fresh_frame_write()?;
+        let result = self.write_packet_frame_inner(buf).await;
+        if result.is_ok() {
+            self.frame_write_torn = false;
+        }
+        result
+    }
+
+    fn begin_fresh_frame_write(&mut self) -> io::Result<()> {
+        let pending_leftover = match &self.inner {
+            SnellInner::V3(conn) => conn.has_pending_write(),
+            SnellInner::V4(conn) => conn.has_pending_write(),
+            SnellInner::V6(conn) => conn.has_pending_write(),
+        };
+        if self.frame_write_torn || pending_leftover {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "snell: packet conn desynced by an earlier incomplete frame write",
+            ));
+        }
+        self.frame_write_torn = true;
+        Ok(())
+    }
+
+    async fn write_packet_frame_inner(&mut self, buf: &[u8]) -> io::Result<usize>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        if buf.len() > self.max_packet_frame_len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snell: packet frame too large",
+            ));
+        }
+        match &mut self.inner {
+            SnellInner::V3(conn) => {
+                conn.write_all(buf).await?;
+                conn.flush().await?;
+            }
+            SnellInner::V4(conn) => {
+                conn.stage_packet_frame(buf)?;
+                std::future::poll_fn(|cx| Pin::new(&mut *conn).poll_flush(cx)).await?;
+            }
+            SnellInner::V6(conn) => {
+                conn.stage_packet_frame(buf)?;
+                std::future::poll_fn(|cx| Pin::new(&mut *conn).poll_flush(cx)).await?;
+            }
+        }
+        Ok(buf.len())
+    }
+
+    /// Poll-based equivalent of [`Snell::write_packet_frame`] for callers
+    /// that release the lock between polls.
+    pub fn poll_write_packet_frame(
+        &mut self,
+        cx: &mut Context<'_>,
+        frame: &[u8],
+        progress: &mut PacketFrameProgress,
+    ) -> Poll<io::Result<()>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        if frame.len() > self.max_packet_frame_len() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snell: packet frame too large",
+            )));
+        }
+        let resuming = progress.staged || progress.written > 0;
+        if !resuming {
+            match self.begin_fresh_frame_write() {
+                Ok(()) => {}
+                Err(e) => return Poll::Ready(Err(e)),
+            }
+        }
+        match &mut self.inner {
+            SnellInner::V3(conn) => {
+                progress.staged = true;
+                while progress.written < frame.len() {
+                    match Pin::new(&mut *conn).poll_write(cx, &frame[progress.written..]) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Ready(Ok(0)) => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "snell v3: packet frame write returned 0",
+                            )));
+                        }
+                        Poll::Ready(Ok(n)) => progress.written += n,
+                    }
+                }
+                match Pin::new(conn).poll_flush(cx) {
+                    Poll::Ready(Ok(())) => {
+                        self.frame_write_torn = false;
+                        *progress = PacketFrameProgress::default();
+                        Poll::Ready(Ok(()))
+                    }
+                    other => other,
+                }
+            }
+            SnellInner::V4(conn) => {
+                if !progress.staged {
+                    match conn.stage_packet_frame(frame) {
+                        Ok(()) => progress.staged = true,
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
+                }
+                match Pin::new(&mut *conn).poll_flush(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(())) => {}
+                }
+                self.frame_write_torn = false;
+                *progress = PacketFrameProgress::default();
+                Poll::Ready(Ok(()))
+            }
+            SnellInner::V6(conn) => {
+                if !progress.staged {
+                    match conn.stage_packet_frame(frame) {
+                        Ok(()) => progress.staged = true,
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
+                }
+                match Pin::new(&mut *conn).poll_flush(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                    Poll::Ready(Ok(())) => {}
+                }
+                self.frame_write_torn = false;
+                *progress = PacketFrameProgress::default();
+                Poll::Ready(Ok(()))
+            }
         }
     }
 
@@ -420,6 +602,68 @@ mod tests {
         (Snell::new(a, Arc::clone(&psk)), V4Conn::new(b, psk))
     }
 
+    struct FlushGate<S> {
+        inner: S,
+        blocked: Arc<std::sync::atomic::AtomicBool>,
+        flushes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl<S> FlushGate<S> {
+        fn new(
+            inner: S,
+        ) -> (
+            Self,
+            Arc<std::sync::atomic::AtomicBool>,
+            Arc<std::sync::atomic::AtomicUsize>,
+        ) {
+            let blocked = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let flushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (
+                Self {
+                    inner,
+                    blocked: Arc::clone(&blocked),
+                    flushes: Arc::clone(&flushes),
+                },
+                blocked,
+                flushes,
+            )
+        }
+    }
+
+    impl<S: AsyncRead + Unpin> AsyncRead for FlushGate<S> {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl<S: AsyncWrite + Unpin> AsyncWrite for FlushGate<S> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flushes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if self.blocked.load(std::sync::atomic::Ordering::Relaxed) {
+                Poll::Pending
+            } else {
+                Pin::new(&mut self.inner).poll_flush(cx)
+            }
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
     #[tokio::test]
     async fn write_header_connect_layout() {
         let (mut client, mut peer) = rig();
@@ -544,5 +788,335 @@ mod tests {
 
         let n = within(client.read(&mut buf)).await.unwrap();
         assert_eq!(&buf[..n], b"again");
+    }
+
+    #[tokio::test]
+    async fn write_udp_header_layout() {
+        let (mut client, mut peer) = rig();
+        within(write_udp_header(&mut client)).await.unwrap();
+        within(client.flush()).await.unwrap();
+
+        let mut got = [0u8; 3];
+        within(peer.read_exact(&mut got)).await.unwrap();
+        assert_eq!(got, [HEADER_VERSION, COMMAND_UDP, 0x00]);
+    }
+
+    #[tokio::test]
+    async fn cancelled_packet_frame_write_tears_conn_v4() {
+        let (a, _b) = tokio::io::duplex(1 << 10);
+        let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+        let mut client = Snell::new(a, psk);
+
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(50),
+            client.write_packet_frame(&[0xAA; 4096]),
+        )
+        .await;
+        assert!(cancelled.is_err(), "write must have timed out mid-frame");
+
+        let err = within(client.write_packet_frame(b"x")).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(
+            err.to_string().contains("desynced"),
+            "write after a cancelled write must fail fast, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_packet_frame_write_tears_conn_v3() {
+        let (a, _b) = tokio::io::duplex(1 << 10);
+        let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+        let mut client = Snell::new_v3(a, psk);
+
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(50),
+            client.write_packet_frame(&[0xAA; 4096]),
+        )
+        .await;
+        assert!(cancelled.is_err(), "write must have timed out mid-frame");
+
+        let err = within(client.write_packet_frame(b"x")).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(
+            err.to_string().contains("desynced"),
+            "write after a cancelled write must fail fast, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn poll_packet_frame_refuses_fresh_progress_on_torn_stream() {
+        for versioned in [false, true] {
+            let (a, _b) = tokio::io::duplex(1 << 10);
+            let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+            let mut client = if versioned {
+                Snell::new_v3(a, psk)
+            } else {
+                Snell::new(a, psk)
+            };
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+
+            let frame = vec![0xAA; 4096];
+            let mut progress = PacketFrameProgress::default();
+            let poll = client.poll_write_packet_frame(&mut cx, &frame, &mut progress);
+            assert!(
+                matches!(poll, Poll::Pending),
+                "v{}: write must park mid-frame on the tiny pipe, got {poll:?}",
+                if versioned { 3 } else { 4 }
+            );
+
+            let mut fresh = PacketFrameProgress::default();
+            match client.poll_write_packet_frame(&mut cx, &frame, &mut fresh) {
+                Poll::Ready(Err(e)) => {
+                    assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+                    assert!(
+                        e.to_string().contains("desynced"),
+                        "v{}: expected desync error, got {e}",
+                        if versioned { 3 } else { 4 }
+                    );
+                }
+                other => panic!(
+                    "v{}: expected desynced error on torn stream, got {other:?}",
+                    if versioned { 3 } else { 4 }
+                ),
+            }
+
+            let poll = client.poll_write_packet_frame(&mut cx, &frame, &mut progress);
+            assert!(
+                matches!(poll, Poll::Pending),
+                "v{}: resume on the undrained pipe must stay Pending, got {poll:?}",
+                if versioned { 3 } else { 4 }
+            );
+        }
+    }
+
+    #[test]
+    fn torn_flag_alone_refuses_fresh_write_and_resume_retries_flush() {
+        use std::sync::atomic::Ordering;
+        for versioned in [false, true] {
+            let (a, _b) = tokio::io::duplex(1 << 16);
+            let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+            let (gate, blocked, flushes) = FlushGate::new(a);
+            let mut client = if versioned {
+                Snell::new_v3(gate, psk)
+            } else {
+                Snell::new(gate, psk)
+            };
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+
+            let frame = vec![0xAA; 4096];
+            let mut progress = PacketFrameProgress::default();
+            let poll = client.poll_write_packet_frame(&mut cx, &frame, &mut progress);
+            assert!(
+                matches!(poll, Poll::Pending),
+                "v{}: blocked transport flush must park the write, got {poll:?}",
+                if versioned { 3 } else { 4 }
+            );
+
+            let mut fresh = PacketFrameProgress::default();
+            match client.poll_write_packet_frame(&mut cx, &frame, &mut fresh) {
+                Poll::Ready(Err(e)) => {
+                    assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+                    assert!(
+                        e.to_string().contains("desynced"),
+                        "v{}: expected desync error, got {e}",
+                        if versioned { 3 } else { 4 }
+                    );
+                }
+                other => panic!(
+                    "v{}: torn flag must refuse fresh progress even with empty codec pending, got {other:?}",
+                    if versioned { 3 } else { 4 }
+                ),
+            }
+
+            blocked.store(false, Ordering::Relaxed);
+            let poll = client.poll_write_packet_frame(&mut cx, &frame, &mut progress);
+            assert!(
+                matches!(poll, Poll::Ready(Ok(()))),
+                "v{}: resume after flush unblocked must complete, got {poll:?}",
+                if versioned { 3 } else { 4 }
+            );
+            assert!(
+                flushes.load(Ordering::Relaxed) >= 2,
+                "v{}: resume must retry the transport flush",
+                if versioned { 3 } else { 4 }
+            );
+        }
+    }
+
+    #[test]
+    fn leftover_codec_pending_refuses_fresh_frame_write() {
+        for versioned in [false, true] {
+            let (a, _b) = tokio::io::duplex(1 << 10);
+            let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+            let mut client = if versioned {
+                Snell::new_v3(a, psk)
+            } else {
+                Snell::new(a, psk)
+            };
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+
+            let raw = vec![0xAA; 4096];
+            let _ = Pin::new(&mut client).poll_write(&mut cx, &raw);
+
+            let mut fresh = PacketFrameProgress::default();
+            match client.poll_write_packet_frame(&mut cx, b"x", &mut fresh) {
+                Poll::Ready(Err(e)) => {
+                    assert_eq!(e.kind(), io::ErrorKind::BrokenPipe);
+                    assert!(
+                        e.to_string().contains("desynced"),
+                        "v{}: expected desync error, got {e}",
+                        if versioned { 3 } else { 4 }
+                    );
+                }
+                other => panic!(
+                    "v{}: leftover codec pending must refuse fresh progress, got {other:?}",
+                    if versioned { 3 } else { 4 }
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn resumed_packet_frame_write_completes_with_intact_frame() {
+        for versioned in [false, true] {
+            let (a, b) = tokio::io::duplex(1 << 10);
+            let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+            let mut client = if versioned {
+                Snell::new_v3(a, Arc::clone(&psk))
+            } else {
+                Snell::new(a, Arc::clone(&psk))
+            };
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            let frame = vec![0xAB; 4096];
+            let mut progress = PacketFrameProgress::default();
+            assert!(
+                client
+                    .poll_write_packet_frame(&mut cx, &frame, &mut progress)
+                    .is_pending(),
+                "v{}: frame must park on the tiny pipe",
+                if versioned { 3 } else { 4 }
+            );
+
+            let mut plain = Vec::new();
+            let mut scratch = [0u8; 1 << 14];
+            let mut completed = false;
+            macro_rules! pump {
+                ($peer:expr) => {
+                    for _ in 0..512 {
+                        if !completed {
+                            match client.poll_write_packet_frame(&mut cx, &frame, &mut progress) {
+                                Poll::Ready(Ok(())) => completed = true,
+                                Poll::Ready(Err(e)) => panic!("resume: {e}"),
+                                Poll::Pending => {}
+                            }
+                        }
+                        loop {
+                            let mut rb = ReadBuf::new(&mut scratch);
+                            match Pin::new(&mut $peer).poll_read(&mut cx, &mut rb) {
+                                Poll::Ready(Ok(())) => {
+                                    if rb.filled().is_empty() {
+                                        break;
+                                    }
+                                    plain.extend_from_slice(rb.filled());
+                                }
+                                Poll::Ready(Err(e)) => panic!("peer read: {e}"),
+                                Poll::Pending => break,
+                            }
+                        }
+                        if completed && plain.len() >= frame.len() {
+                            break;
+                        }
+                    }
+                };
+            }
+            if versioned {
+                let mut peer = V3Conn::new(b, psk);
+                pump!(peer);
+            } else {
+                let mut peer = V4Conn::new(b, psk);
+                pump!(peer);
+            }
+            assert!(
+                completed,
+                "v{}: resumed write never completed",
+                if versioned { 3 } else { 4 }
+            );
+            assert_eq!(
+                plain,
+                frame,
+                "v{}: peer decoded corrupted frame",
+                if versioned { 3 } else { 4 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_packet_frame_write_leaves_conn_usable() {
+        let (mut client, mut peer) = rig();
+        within(client.write_packet_frame(b"datagram"))
+            .await
+            .unwrap();
+        within(client.write_packet_frame(b"second")).await.unwrap();
+
+        let mut got = [0u8; 64];
+        let n = within(peer.read(&mut got)).await.unwrap();
+        assert!(n >= b"datagram".len(), "peer saw {n} bytes");
+    }
+
+    #[tokio::test]
+    async fn completed_packet_frame_write_leaves_conn_usable_v3() {
+        let (a, b) = tokio::io::duplex(1 << 16);
+        let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+        let mut client = Snell::new_v3(a, Arc::clone(&psk));
+        let mut peer = V3Conn::new(b, psk);
+
+        within(client.write_packet_frame(b"datagram"))
+            .await
+            .unwrap();
+        within(client.write_packet_frame(b"second")).await.unwrap();
+
+        let mut got = [0u8; 64];
+        let n = within(peer.read(&mut got)).await.unwrap();
+        assert!(n >= b"datagram".len(), "peer saw {n} bytes");
+    }
+
+    #[tokio::test]
+    async fn write_packet_frame_rejects_oversize() {
+        let (mut client, _peer) = rig();
+        let oversize = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
+        let err = within(client.write_packet_frame(&oversize))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        within(client.write_packet_frame(b"after")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_packet_frame_roundtrips() {
+        let (mut client, mut peer) = rig();
+        let n = within(client.write_packet_frame(b"datagram"))
+            .await
+            .unwrap();
+        assert_eq!(n, b"datagram".len());
+
+        let mut buf = [0u8; 64];
+        let m = within(peer.read(&mut buf)).await.unwrap();
+        assert_eq!(&buf[..m], b"datagram");
+    }
+
+    #[tokio::test]
+    async fn write_packet_frame_v6_larger_frame_limit() {
+        let (a, _b) = tokio::io::duplex(1 << 18);
+        let psk: Arc<[u8]> = Arc::from(b"test-psk".as_slice());
+        let codec = V6Codec::new(super::super::v6::SnellV6Mode::Default, &psk);
+        let mut client = Snell::new_v6(a, Arc::clone(&psk), codec);
+
+        assert_eq!(client.max_packet_frame_len(), V6_MAX_RECORD_PAYLOAD);
+        const { assert!(V6_MAX_RECORD_PAYLOAD > MAX_PAYLOAD_LENGTH) };
+
+        let oversize = vec![0u8; V6_MAX_RECORD_PAYLOAD + 1];
+        let err = client.write_packet_frame(&oversize).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

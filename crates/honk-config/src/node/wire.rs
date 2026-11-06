@@ -411,6 +411,7 @@ impl FlatNode {
                         | NodeProtocol::VMess
                         | NodeProtocol::VLess
                         | NodeProtocol::AnyTLS
+                        | NodeProtocol::Snell
                 ),
             network
         );
@@ -706,6 +707,7 @@ impl FlatNode {
                 psk: flat.snell_psk.take(),
                 version: flat.snell_version,
                 mode: flat.snell_mode.take(),
+                network: flat.network.take(),
             }),
             NodeProtocol::Direct => OutboundConfig::Direct,
             NodeProtocol::Block => OutboundConfig::Block,
@@ -949,6 +951,7 @@ impl<'a> WireOptions<'a> {
                 wire.snell_psk = config.psk.as_deref();
                 wire.snell_version = config.version;
                 wire.snell_mode = config.mode.as_deref();
+                wire.network = config.network.as_deref();
             }
             OutboundConfig::Direct | OutboundConfig::Block => {}
         }

@@ -88,6 +88,7 @@ async fn snell_v4_round_trip() {
             psk: Some(PSK.to_string()),
             version: Some(4),
             mode: None,
+            network: None,
         }),
         ..Default::default()
     };

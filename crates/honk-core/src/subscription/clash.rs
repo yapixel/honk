@@ -468,6 +468,7 @@ fn apply_stream(mapping: &Mapping, node: &mut Node, udp: Option<bool>) -> Result
                 // representable; `udp: true` keeps the TCP node as-is.
                 OutboundConfig::Vmess(config) if !udp => config.network = Some(network),
                 OutboundConfig::Vless(config) => config.network = Some(network),
+                OutboundConfig::Snell(config) => config.network = Some(network),
                 _ => {}
             }
         }
@@ -833,16 +834,25 @@ proxies:
     psk: secret6
     version: 6
     mode: unshaped
+  - name: snell-v3
+    type: snell
+    server: 1.2.3.4
+    port: 8387
+    psk: secret3
+    udp: false
+    version: 3
 "#,
         )
         .unwrap();
 
-        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes.len(), 3);
         assert_eq!(nodes[0].name, "snell-v4");
         assert_eq!(nodes[0].protocol(), NodeProtocol::Snell);
         let snell0 = nodes[0].snell().unwrap();
         assert_eq!(snell0.psk.as_deref(), Some("secret4"));
         assert_eq!(snell0.version, Some(4));
+        assert_eq!(snell0.network.as_deref(), Some("tcp,udp"));
+        assert_eq!(nodes[0].network(), Some("tcp,udp"));
 
         assert_eq!(nodes[1].name, "snell-v6");
         assert_eq!(nodes[1].protocol(), NodeProtocol::Snell);
@@ -850,6 +860,16 @@ proxies:
         assert_eq!(snell1.psk.as_deref(), Some("secret6"));
         assert_eq!(snell1.version, Some(6));
         assert_eq!(snell1.mode.as_deref(), Some("unshaped"));
+        assert_eq!(snell1.network.as_deref(), None);
+        assert_eq!(nodes[1].network(), None);
+
+        assert_eq!(nodes[2].name, "snell-v3");
+        assert_eq!(nodes[2].protocol(), NodeProtocol::Snell);
+        let snell2 = nodes[2].snell().unwrap();
+        assert_eq!(snell2.psk.as_deref(), Some("secret3"));
+        assert_eq!(snell2.version, Some(3));
+        assert_eq!(snell2.network.as_deref(), Some("tcp"));
+        assert_eq!(nodes[2].network(), Some("tcp"));
     }
 
     #[test]

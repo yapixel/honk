@@ -242,7 +242,7 @@ Supported spelling aliases normalize before node identity is derived.
 | Hysteria2 | `password`/`auth`; `obfs: salamander` with `obfs-password`; upload/download bandwidth; `ports`/`mport` hopping ranges; `hop-interval`/`mhop`; receive windows; MTU and MTU-discovery settings. |
 | TUIC | UUID/password, congestion control, ALPN, receive windows, MTU. |
 | AnyTLS | `idle-session-check-interval`, `idle-session-timeout`, `min-idle-session`. |
-| Snell | `psk`, integer `version` (3–6, default 4), v6 `mode`. `reuse: true` and active `obfs-opts` are rejected; `udp: true` imports the node for TCP only. |
+| Snell | `psk`, integer `version` (3–6, default 4), v6 `mode`. `reuse: true` and active `obfs-opts` are rejected; `udp` maps to packet capability (true -> tcp,udp, false -> tcp). |
 
 Explicit disabled feature blocks are treated as disabled, not as unsupported active features. `udp: true` is accepted for intrinsically UDP-capable protocols, and ignored on VMess, which has no UDP path, so the node still imports for TCP. An explicit UDP restriction is rejected where the node model cannot preserve it.
 
