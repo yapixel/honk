@@ -89,6 +89,7 @@ EOF
     CXX_aarch64_linux_android="$toolchain/bin/aarch64-linux-android${api}-clang++" \
     AR_aarch64_linux_android="$toolchain/bin/llvm-ar" \
     CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$clang" \
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-lc++abi" \
     BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android${api} --sysroot=$toolchain/sysroot" \
     BORING_BSSL_RUST_CPPLIB_aarch64_linux_android="c++_static" \
     CMAKE_TOOLCHAIN_FILE="$wrapper" \

@@ -116,6 +116,7 @@ jobs:
           echo "CXX_aarch64_linux_android=$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$toolchain/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-lc++abi" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android${ANDROID_API} --sysroot=$sysroot" >> "$GITHUB_ENV"
           echo "BORING_BSSL_RUST_CPPLIB_aarch64_linux_android=c++_static" >> "$GITHUB_ENV"
           echo "CMAKE_TOOLCHAIN_FILE=$wrapper" >> "$GITHUB_ENV"
