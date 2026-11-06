@@ -189,6 +189,15 @@ static DESCRIPTORS: &[ProtocolDescriptor] = &[
         generation_runtime: GenerationRuntime::AnyTls,
         share_link_schemes: &["anytls"],
     },
+    ProtocolDescriptor {
+        protocol: NodeProtocol::Snell,
+        supports_udp: never,
+        pool_ready_streams: never,
+        pool_bare_tcp: always,
+        supports_warm: no_warm,
+        generation_runtime: GenerationRuntime::None,
+        share_link_schemes: &[],
+    },
     // Each direct flow owns a socket carrying its own rule or global mark; a
     // pooled socket would hand one flow another flow's mark.
     ProtocolDescriptor {
@@ -240,6 +249,7 @@ mod tests {
             NodeProtocol::Tuic,
             NodeProtocol::Juicity,
             NodeProtocol::AnyTLS,
+            NodeProtocol::Snell,
             NodeProtocol::Direct,
             NodeProtocol::Block,
         ] {

@@ -88,6 +88,7 @@ honk 可配合以下两类网页界面使用：
 - [sing-box](https://github.com/SagerNet/sing-box)：出站组与 Clash API 模式
 - [daeuniverse/outbound](https://github.com/daeuniverse/outbound)：协议参考
 - [juicity-rs](https://github.com/juicity/juicity-rs)（Markson Pigeonzilla Plus）：Juicity 协议参考、wire 格式对齐及真实互通测试
+- [meow-rs](https://github.com/meow-rs/meow-rs)（MIT）：Snell 编解码移植至 `honk-outbound/src/proxy/snell/`
 - [aya-rs](https://github.com/aya-rs/aya)：Rust eBPF
 
 ## 许可证

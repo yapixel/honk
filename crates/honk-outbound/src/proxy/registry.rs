@@ -179,6 +179,9 @@ impl ProxyRegistry {
                 .with_warmable(anytls.clone())
                 .with_probeable(anytls),
         );
+        let snell = Arc::new(crate::proxy::snell::SnellHandler::new());
+        registry
+            .register(ProtocolEntry::new(NodeProtocol::Snell, snell.clone()).with_probeable(snell));
         let tuic = Arc::new(TuicHandler::new());
         registry.register(
             ProtocolEntry::new(NodeProtocol::Tuic, tuic.clone())

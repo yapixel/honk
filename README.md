@@ -88,6 +88,7 @@ For vulnerabilities, follow [SECURITY.md](.github/SECURITY.md).
 - [sing-box](https://github.com/SagerNet/sing-box): outbound group and Clash API patterns
 - [daeuniverse/outbound](https://github.com/daeuniverse/outbound): protocol reference
 - [juicity-rs](https://github.com/juicity/juicity-rs) by Markson Pigeonzilla Plus: Juicity protocol reference, wire-format alignment, and live interop testing
+- [meow-rs](https://github.com/meow-rs/meow-rs) (MIT): Snell codecs ported into `honk-outbound/src/proxy/snell/`
 - [aya-rs](https://github.com/aya-rs/aya): Rust eBPF
 
 ## License

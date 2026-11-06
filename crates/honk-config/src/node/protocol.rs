@@ -243,6 +243,13 @@ pub struct AnyTlsConfig {
     pub tls: TlsOptions,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SnellConfig {
+    pub psk: Option<String>,
+    pub version: Option<u8>,
+    pub mode: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutboundConfig {
     Shadowsocks(ShadowsocksConfig),
@@ -254,6 +261,7 @@ pub enum OutboundConfig {
     Tuic(TuicConfig),
     Juicity(JuicityConfig),
     AnyTls(AnyTlsConfig),
+    Snell(SnellConfig),
     Direct,
     Block,
 }
@@ -276,6 +284,7 @@ impl OutboundConfig {
             NodeProtocol::Tuic => Self::Tuic(TuicConfig::default()),
             NodeProtocol::Juicity => Self::Juicity(JuicityConfig::default()),
             NodeProtocol::AnyTLS => Self::AnyTls(AnyTlsConfig::default()),
+            NodeProtocol::Snell => Self::Snell(SnellConfig::default()),
             NodeProtocol::Direct => Self::Direct,
             NodeProtocol::Block => Self::Block,
         }
@@ -292,6 +301,7 @@ impl OutboundConfig {
             Self::Tuic(_) => NodeProtocol::Tuic,
             Self::Juicity(_) => NodeProtocol::Juicity,
             Self::AnyTls(_) => NodeProtocol::AnyTLS,
+            Self::Snell(_) => NodeProtocol::Snell,
             Self::Direct => NodeProtocol::Direct,
             Self::Block => NodeProtocol::Block,
         }
@@ -306,7 +316,11 @@ impl OutboundConfig {
             Self::Tuic(config) => Some(&config.quic.tls),
             Self::Juicity(config) => Some(&config.quic.tls),
             Self::AnyTls(config) => Some(&config.tls),
-            Self::Shadowsocks(_) | Self::Socks5(_) | Self::Direct | Self::Block => None,
+            Self::Shadowsocks(_)
+            | Self::Socks5(_)
+            | Self::Snell(_)
+            | Self::Direct
+            | Self::Block => None,
         }
     }
 
@@ -319,7 +333,11 @@ impl OutboundConfig {
             Self::Tuic(config) => Some(&mut config.quic.tls),
             Self::Juicity(config) => Some(&mut config.quic.tls),
             Self::AnyTls(config) => Some(&mut config.tls),
-            Self::Shadowsocks(_) | Self::Socks5(_) | Self::Direct | Self::Block => None,
+            Self::Shadowsocks(_)
+            | Self::Socks5(_)
+            | Self::Snell(_)
+            | Self::Direct
+            | Self::Block => None,
         }
     }
 
@@ -365,6 +383,20 @@ impl OutboundConfig {
         }
     }
 
+    pub fn snell(&self) -> Option<&SnellConfig> {
+        match self {
+            Self::Snell(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn snell_mut(&mut self) -> Option<&mut SnellConfig> {
+        match self {
+            Self::Snell(config) => Some(config),
+            _ => None,
+        }
+    }
+
     pub(crate) fn credential_fingerprint(&self) -> String {
         match self {
             Self::Shadowsocks(config) => identity_join(&[
@@ -392,6 +424,14 @@ impl OutboundConfig {
                 config.password.as_deref().unwrap_or(""),
             ]),
             Self::AnyTls(config) => identity_join(&[config.password.as_deref().unwrap_or("")]),
+            Self::Snell(config) => {
+                let version_str = config.version.map_or(String::new(), |v| v.to_string());
+                identity_join(&[
+                    config.psk.as_deref().unwrap_or(""),
+                    &version_str,
+                    config.mode.as_deref().unwrap_or(""),
+                ])
+            }
             Self::Direct | Self::Block => String::new(),
         }
     }

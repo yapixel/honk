@@ -180,6 +180,27 @@ impl Node {
                 }
                 return self.validate_protocol_inner();
             }
+            OutboundConfig::Snell(config) => {
+                let psk = config.psk.as_deref().unwrap_or("");
+                if psk.trim().is_empty() {
+                    return Err(invalid(Some("snell_psk"), "snell: psk is required"));
+                }
+                if let Some(v) = config.version
+                    && !(3..=6).contains(&v)
+                {
+                    return Err(invalid(
+                        Some("snell_version"),
+                        "snell: version must be 3, 4, 5, or 6",
+                    ));
+                }
+                if config.mode.is_some() && config.version != Some(6) {
+                    return Err(invalid(
+                        Some("snell_mode"),
+                        "snell: mode is only supported with version 6",
+                    ));
+                }
+                return self.validate_protocol_inner();
+            }
             _ => return self.validate_protocol_inner(),
         };
         let uuid = uuid.ok_or_else(|| invalid(None, "protocol requires a valid UUID"))?;
