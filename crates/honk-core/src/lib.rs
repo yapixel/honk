@@ -233,7 +233,9 @@ pub struct Cli {
     pub command: Option<ClashCommand>,
 
     /// Path to configuration file
-    #[arg(short, long, default_value = "/etc/honk/config.dae")]
+    #[arg(short, long)]
+    #[cfg_attr(target_os = "android", arg(default_value = "/data/adb/honk/config.dae"))]
+    #[cfg_attr(not(target_os = "android"), arg(default_value = "/etc/honk/config.dae"))]
     pub config: PathBuf,
 
     /// Append operational logs to this path, overriding `global.log_file`
@@ -398,7 +400,15 @@ pub async fn handle_clash_command(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+const INSTANCE_LOCK_PATH: &str = "/data/adb/honk/honk-core.lock";
+#[cfg(not(target_os = "android"))]
 const INSTANCE_LOCK_PATH: &str = "/run/honk-core.lock";
+
+#[cfg(target_os = "android")]
+const DEFAULT_CONFIG_PATH: &str = "/data/adb/honk/config.dae";
+#[cfg(not(target_os = "android"))]
+const DEFAULT_CONFIG_PATH: &str = "/etc/honk/config.dae";
 
 fn publish_instance_pid(file: &mut std::fs::File) -> anyhow::Result<()> {
     use std::io::Write;
@@ -538,7 +548,18 @@ fn instance_lock(mock_mode: bool) -> anyhow::Result<Option<nix::fcntl::Flock<std
     if mock_mode {
         return Ok(None);
     }
-    // /run, not the bpffs pin root, which rejects regular files.
+    if let Some(parent) = std::path::Path::new(INSTANCE_LOCK_PATH).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            anyhow::anyhow!(
+                "create instance lock directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    // Keep the lock beside the Android runtime home (or /run on Linux), not
+    // under the bpffs pin root, which rejects regular files.
     acquire_instance_lock(
         std::path::Path::new(INSTANCE_LOCK_PATH),
         std::time::Duration::from_secs(240),
@@ -1532,7 +1553,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             let mut diagnostics = Vec::new();
             let result = load_operator_config(
-                config_path.to_str().unwrap_or("/etc/honk/config.dae"),
+                config_path.to_str().unwrap_or(DEFAULT_CONFIG_PATH),
                 &mut diagnostics,
             );
             report_detailed_diagnostics(&diagnostics);
@@ -1613,8 +1634,10 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     #[cfg(feature = "native-api")]
     native_api::NativeRuntime::shutdown(native, &control_plane, control_result.is_err()).await;
 
-    // Signal systemd that we're stopping (Type=notify)
-    #[cfg(target_os = "linux")]
+    // Signal systemd that we're stopping (Type=notify). Android has no
+    // systemd userspace or libsystemd ABI, while the datapath shutdown itself
+    // remains identical.
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
     let _ = libsystemd::daemon::notify(false, &[libsystemd::daemon::NotifyState::Stopping]);
 
     sig_handle.abort();

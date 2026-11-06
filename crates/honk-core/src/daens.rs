@@ -93,7 +93,7 @@ pub(crate) fn create_dae0_link() -> anyhow::Result<(Dae0Guard, Dae0Setup)> {
     // Stale-state cleanup (previous run): drop the compat bind-mount (the
     // FD-held namespace dies with its owner process) and any leftover dae0.
     // The singleton lock guarantees no live sibling owns these names.
-    if is_mountpoint("/run/netns/daens") {
+    if is_mountpoint(DAENS_NS_PATH) {
         let _ = nix::mount::umount2(DAENS_NS_PATH, nix::mount::MntFlags::MNT_DETACH);
     }
     if let Ok(idx) = netlink::ifindex_of("dae0")
@@ -323,15 +323,24 @@ pub(crate) fn setup_daens_namespace(tproxy_mark: u32, tproxy_port: u16) -> anyho
 /// Path of the daens network-namespace bind-mount, kept for external
 /// tooling compatibility (`ip netns exec`, debug shells). The engine
 /// itself never depends on it — the namespace is FD-owned (below).
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "android")]
+pub(crate) const DAENS_NS_PATH: &str = "/data/adb/honk/netns/daens";
+
+#[cfg(not(target_os = "android"))]
 pub(crate) const DAENS_NS_PATH: &str = "/var/run/netns/daens";
+
+#[cfg(target_os = "android")]
+const DAENS_NETNS_DIR: &str = "/data/adb/honk/netns";
+
+#[cfg(not(target_os = "android"))]
+const DAENS_NETNS_DIR: &str = "/run/netns";
 
 /// Runtime truth for "daens is set up", set by [`setup_daens_namespace`]
 /// on success. Socket creation must key on this, never on
 /// `DAENS_NS_PATH` existing — a leftover or failed compat mount says
 /// nothing about the datapath (a first clean deploy once bound every
 /// TPROXY listener into the host namespace because of that confusion).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) static DAENS_READY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -353,7 +362,7 @@ static COMPAT_FILE_CREATED: std::sync::atomic::AtomicBool =
 #[cfg(feature = "ebpf")]
 static DAENS_FD: std::sync::OnceLock<std::os::unix::io::OwnedFd> = std::sync::OnceLock::new();
 
-/// Whether THIS instance mounted the tmpfs at /run/netns (the compat
+/// Whether THIS instance mounted the platform netns directory (the compat
 /// bind-mount's parent). Tracked separately from [`COMPAT_MOUNTED`]:
 /// cleanup unmounts the parent only when it is ours.
 #[cfg(feature = "ebpf")]
@@ -382,24 +391,23 @@ fn create_daens_namespace() -> anyhow::Result<&'static std::os::unix::io::OwnedF
         // /proc/self/ns/net always shows the main thread's namespace. This
         // thread-local path is the namespace created by unshare above.
         let task_ns = "/proc/thread-self/ns/net";
-        // Best-effort compat mount: /var/run/netns/daens (iproute2 shape).
+        // Best-effort compat mount at the platform's iproute2-shaped path.
         // The target must be a FILE — namespace handles are files, and a
         // file bind-mount onto a directory fails with ENOTDIR. The parent
         // is made a mountpoint (tmpfs) only if it isn't one already —
         // crucially NOT via a self-MS_BIND, which would stack-duplicate
         // every nsfs mount beneath it (lab ns pins included) on every
         // engine restart.
-        let _ = std::fs::create_dir_all("/var/run/netns");
-        // /proc/mounts lists the real path (/var/run is a symlink to
-        // /run) — check the canonical path or every engine start
+        let _ = std::fs::create_dir_all(DAENS_NETNS_DIR);
+        // Check the canonical path before mounting, or every engine start
         // mounts a fresh tmpfs over the registry, hiding iproute2's
-        // namespace files (the lab netns "disappears"). The tmpfs must
+        // namespace files. The tmpfs must
         // be mounted BEFORE the target file is created, or the mount
         // hides it and the bind below fails on a first clean deploy.
-        if !is_mountpoint("/run/netns") {
+        if !is_mountpoint(DAENS_NETNS_DIR) {
             match nix::mount::mount(
                 Some("tmpfs"),
-                "/var/run/netns",
+                DAENS_NETNS_DIR,
                 Some("tmpfs"),
                 nix::mount::MsFlags::empty(),
                 None::<&str>,
@@ -407,7 +415,7 @@ fn create_daens_namespace() -> anyhow::Result<&'static std::os::unix::io::OwnedF
                 Ok(()) => {
                     PARENT_TMPFS_MOUNTED.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
-                Err(error) => warn!("tmpfs mount on /run/netns failed: {error}"),
+                Err(error) => warn!(path = DAENS_NETNS_DIR, "tmpfs mount failed: {error}"),
             }
         }
         let compat_target_ready = match std::fs::OpenOptions::new()
@@ -520,7 +528,7 @@ pub(crate) fn daens_netns_cookie() -> anyhow::Result<u64> {
 /// process-wide mutex serializes the switches; it is not strictly required
 /// for correctness (each switch is per-thread) but keeps enter/leave pairs
 /// easy to reason about and the logs ordered.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn with_daens_netns<R>(
     op: &str,
     f: impl FnOnce() -> anyhow::Result<R>,
@@ -594,7 +602,7 @@ fn cleanup_dae0_interface(recorded_ifindex: Option<u32>) {
     }
     // Same ownership rule for the parent tmpfs (child must go first).
     if PARENT_TMPFS_MOUNTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
-        let _ = nix::mount::umount2("/run/netns", nix::mount::MntFlags::MNT_DETACH);
+        let _ = nix::mount::umount2(DAENS_NETNS_DIR, nix::mount::MntFlags::MNT_DETACH);
     }
     DAENS_READY.store(false, std::sync::atomic::Ordering::Release);
     // The FD-owned namespace dies with the process (dae0peer goes with it).

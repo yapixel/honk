@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Default home for generated state and runtime-supplied assets.
+#[cfg(target_os = "android")]
+pub const DEFAULT_DATA_DIR: &str = "/data/adb/honk";
+/// Default home for generated state and runtime-supplied assets.
+#[cfg(not(target_os = "android"))]
 pub const DEFAULT_DATA_DIR: &str = "/var/lib/honk";
 
 /// Previous default home retained for existing runtime state and assets.

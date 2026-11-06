@@ -129,6 +129,9 @@ lru = "0.19"
 libc = "0.2"
 parking_lot = "0.13"
 dashmap = "6"
+# Linux service-manager notifications are omitted on Android, whose Bionic
+# userspace does not ship libsystemd. The crate remains available to the
+# non-Android Linux build through honk-core's target-specific dependency.
 libsystemd = "0.7"
 nix = { version = "0.31", features = [
     "time",
