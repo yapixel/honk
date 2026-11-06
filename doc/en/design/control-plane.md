@@ -27,13 +27,13 @@ Module map:
 
 ## Startup and shutdown
 
-- `src/lib.rs`: `run()`, `Cli`/`ClashCommand`, resource limits, backend selection, fixed-queue startup preflight ([Configuration](../configuration.md)). Real instances hold `/run/honk-core.lock` and publish the `reload` PID. `src/daens.rs` owns FD-owned `daens`/`dae0` setup and scoped namespace switches; `src/sysctl.rs` owns sysctl writes and hardening verification. Load/reuse the persistent allocator pin, then start NFQUEUE before datapath admission.
+- `src/lib.rs`: `run()`, `Cli`/`ClashCommand`, resource limits, backend selection, fixed-queue startup preflight ([Configuration](../configuration.md)). Real instances hold `/run/honk-core.lock` on Linux or `/data/adb/honk/honk-core.lock` on Android and publish the `reload` PID. `src/daens.rs` owns FD-owned `daens`/`dae0` setup and scoped namespace switches; `src/sysctl.rs` owns sysctl writes and hardening verification. Load/reuse the persistent allocator pin, then start NFQUEUE before datapath admission.
 
 honk collects configuration diagnostics before it sets up tracing. If loading or operator validation fails early, honk writes the diagnostics collected before the failure to stderr once, then returns the redacted terminal cause. Successful loading defers diagnostics to the configured tracing subscriber. Later runtime fatal errors keep their existing log-file mirror.
 
 Startup keeps kernel admission closed until userspace can receive every redirected flow:
 
-1. Real mode takes `/run/honk-core.lock`, waiting up to 240 seconds for a previous instance to exit, and publishes the process PID in the locked file; `honk-core reload` reads that PID and sends `SIGHUP`. A successor that cannot take the lock exits before it reads the configuration or opens the state db. Mock mode does not take the process-global lock.
+1. Real mode takes `/run/honk-core.lock` on Linux or `/data/adb/honk/honk-core.lock` on Android, waiting up to 240 seconds for a previous instance to exit, and publishes the process PID in the locked file; `honk-core reload` reads that PID and sends `SIGHUP`. A successor that cannot take the lock exits before it reads the configuration or opens the state db. Mock mode does not take the process-global lock.
 2. Load and validate the configuration, select `global.data_dir`, initialize the process bypass mark before any network I/O, raise `RLIMIT_NOFILE`, and take one immutable descriptor-budget snapshot.
 3. Restore persisted subscriptions before network refresh. Only subscriptions without a valid restored body participate in the five-second first-fetch grace period.
 4. After the real-instance lock handoff, probe the fixed NFQUEUE queue prerequisites. Mock/no-`ebpf` mode or a failed preflight logs a warning and disables NFQUEUE for this process; the preflight does not reject the reserved nftables table because installation reclaims stale owned state.

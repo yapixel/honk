@@ -135,8 +135,9 @@ Body parser selection:
 
 | Property | Current behavior |
 | --- | --- |
-| Location | The `subscription_body` table of the state db, `<data_dir>/state/honk.db`. The file is 0600 in a 0700 directory. See the [API reference](./api.md#configuration-db---store-db). The default `data_dir` is `/var/lib/honk`. |
-| Key | URL-safe Base64 of a SHA-256 hash plus `.sub`. The hash covers the length-delimited URL, the configured user-agent override (empty when unset or empty), and the ordered header key/value pairs. The versioned default request UA is intentionally not part of the key, so default subscriptions retain their body across upgrades. The request identity is not exposed in plaintext. |
+| Property | Current behavior |
+| --- | --- |
+| Location | The `subscription_body` table of the state db, `<data_dir>/state/honk.db`. The file is 0600 in a 0700 directory. See the [API reference](./api.md#configuration-db---store-db). The default `data_dir` is `/var/lib/honk` on Linux and `/data/adb/honk` on Android. |
 | Write boundary | After HTTP success and body acceptance, the complete raw response, including rejected entries, is written in one transaction. |
 | Limits | Each body is at most 8 MiB, and all bodies together at most 32 MiB. A write that would pass 32 MiB first deletes bodies of subscriptions that are no longer enabled. If that is not enough, the write is refused, the previous body stays, and the fetch reports `subscription-store-write-failed`. A body whose subscription is not enabled at two consecutive maintenance ticks (every 60 seconds) is deleted. A start with `store_subscribe: false` empties the table even when `cache_file`, `password_auth` or `--store db` still opens the state db. |
 | Upgrade from `.sub` | Import eligible legacy bodies after acquiring the instance lock, as described below. |

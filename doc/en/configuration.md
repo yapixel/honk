@@ -55,7 +55,7 @@ The entry file's own sections merge first regardless of where its `include` bloc
 
 ## Runtime data directory
 
-`global.data_dir` is the process-wide root for runtime state and relative runtime-supplied files. It defaults to `/var/lib/honk` and must be a non-empty absolute path. Changing it requires restart.
+`global.data_dir` is the process-wide root for runtime state and relative runtime-supplied files. It defaults to `/var/lib/honk` on Linux and `/data/adb/honk` on Android, and must be a non-empty absolute path. Changing it requires restart.
 
 At startup, honk recursively creates the directory and probes it by creating and removing a new private file. If the candidate is unusable, honk falls back only to a directory that passes the same probe. `--store db` and an enabled native API password login refuse this fallback.
 

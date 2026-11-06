@@ -27,13 +27,13 @@
 
 ## 启动与关闭
 
-- `src/lib.rs` — `run()`、`Cli`/`ClashCommand`、资源限制、后端选择，以及固定队列的启动前置检查，见[配置指南](../configuration.md)。真实实例持有 `/run/honk-core.lock`，并把自己发布成 `reload` 用的 PID。`src/daens.rs` 负责 FD 持有的 `daens`/`dae0` 初始化和有作用域的命名空间切换；`src/sysctl.rs` 负责写 sysctl 并验证加固结果。加载或复用持久化的 allocator pin，然后在数据路径 admission 之前启动 NFQUEUE。
+- `src/lib.rs` — `run()`、`Cli`/`ClashCommand`、资源限制、后端选择，以及固定队列的启动前置检查，见[配置指南](../configuration.md)。真实实例在 Linux 上持有 `/run/honk-core.lock`，在 Android 上持有 `/data/adb/honk/honk-core.lock`，并把自己发布成 `reload` 用的 PID。`src/daens.rs` 负责 FD 持有的 `daens`/`dae0` 初始化和有作用域的命名空间切换；`src/sysctl.rs` 负责写 sysctl 并验证加固结果。加载或复用持久化的 allocator pin，然后在数据路径 admission 之前启动 NFQUEUE。
 
 配置诊断在初始化 tracing 之前就收集。加载或配置校验提前失败时，先往标准错误输出已有的非终止诊断，每条只输出一次，然后由二进制程序返回一次脱敏后的终止错误。加载成功时，诊断会等到配置指定的 tracing 订阅器就绪后再输出。之后运行时的致命错误仍按原有方式写入日志文件。
 
 启动时保持内核 admission 关闭，直到用户态能够接收每个重定向流：
 
-1. 真实模式取得 `/run/honk-core.lock`，最多等待 240 秒让前一个实例退出，并把进程 PID 发布到已锁文件；`honk-core reload` 读取该 PID 并发送 `SIGHUP`。未取得锁的后继实例在读取配置和打开状态数据库之前退出。Mock 模式不取得进程全局锁。
+1. 真实模式在 Linux 上取得 `/run/honk-core.lock`，在 Android 上取得 `/data/adb/honk/honk-core.lock`，最多等待 240 秒让前一个实例退出，并把进程 PID 发布到已锁文件；`honk-core reload` 读取该 PID 并发送 `SIGHUP`。未取得锁的后继实例在读取配置和打开状态数据库之前退出。Mock 模式不取得进程全局锁。
 2. 加载并校验配置、选择 `global.data_dir`，在任何网络 I/O 前初始化进程 bypass mark，提升 `RLIMIT_NOFILE`，并取得一次不可变的描述符预算快照。
 3. 在网络刷新前恢复持久化订阅。只有没有有效已恢复内容的订阅，才参与五秒首次拉取宽限期。
 4. 真实实例完成锁交接后，再探测固定 NFQUEUE 队列的前置条件。mock 模式、不带 `ebpf` 的模式，或前置检查失败时，记 warning，只在本进程关掉 NFQUEUE；前置检查不会拒绝保留的 nftables table，因为安装阶段会回收残留的自有状态。
@@ -45,7 +45,6 @@
 10. 检查 NFQUEUE 健康状态，发布 ready，开放 pending verdict admission，最后把
     `DATAPATH_STATE_MAP[0]` 设为 ready。之后 TCP accept loop 在控制面 supervisor
     里运行。
-
 `RealEbpfBackend` 负责 aya program、map、link、持久分配器处理和真实的 NFQUEUE 集
 成。`MockEbpfBackend` 在没有特权内核资源时，提供同样的控制面接口。请求的 NFQUEUE
 路径如果过不了锁交接后的固定队列前置检查，或者过不了随后 admission 之前的队列、

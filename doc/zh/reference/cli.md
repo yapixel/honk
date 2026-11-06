@@ -14,7 +14,7 @@ honk-core [OPTIONS] [COMMAND]
 
 | Key | 默认值 | 含义 |
 | --- | --- | --- |
-| `-c`, `--config PATH` | 省略，`/etc/honk/config.dae` | 配置入口文件。见 [`--config`](#--config)。 |
+| `-c`, `--config PATH` | 省略，Linux 为 `/etc/honk/config.dae`，Android 为 `/data/adb/honk/config.dae` | 配置入口文件。见 [`--config`](#--config)。 |
 | `--log-file PATH` | 省略，未设置 | 覆盖本次引擎进程的 `global.log_file`。见 [`--log-file`](#--log-file)。 |
 | `-b`, `--bpf-object PATH` | 省略，内嵌目标文件 | 替换 `ebpf` 构建内嵌的目标文件；只有真实后端读取它。 |
 | `--bpf-pin-root PATH` | 省略，`/sys/fs/bpf` | eBPF map 的 pin 根目录，传给真实后端。 |
@@ -22,7 +22,7 @@ honk-core [OPTIONS] [COMMAND]
 | `-d`, `--debug` | 省略，关 | `RUST_LOG` 没提供有效过滤器时，用 `debug` 作默认控制台过滤器。 |
 | `--mock-ebpf` | 省略，关 | 用 `MockEbpfBackend`，不加载内核 eBPF。见 [`--mock-ebpf`](#--mock-ebpf)。 |
 | `--store file\|db` | 省略，`file` | 从 `<data-dir>/state/honk.db` 里的修订版本加载配置。见 [`--store`](#--store)。 |
-| `--data-dir PATH` | 省略，`/var/lib/honk` | 数据目录，状态数据库在它下面的 `state/honk.db`。见 [`--data-dir`](#--data-dir)。 |
+| `--data-dir PATH` | 省略，Linux 为 `/var/lib/honk`，Android 为 `/data/adb/honk` | 数据目录，状态数据库在它下面的 `state/honk.db`。见 [`--data-dir`](#--data-dir)。 |
 
 两个二进制都提供 `-h`/`--help` 和 `-v`/`--version`。
 
@@ -131,7 +131,7 @@ honk-core --store db --data-dir /var/lib/honk
 honk-core reload
 ```
 
-从已加锁的 `/run/honk-core.lock` 读取 PID，发送 `SIGHUP`。
+从已加锁的 Linux `/run/honk-core.lock` 或 Android `/data/adb/honk/honk-core.lock` 读取 PID，发送 `SIGHUP`。
 
 只报告信号送达成功；运行中的进程随后记录 `applied` 或 `rejected`。mock 实例不持有这把锁。
 
@@ -196,6 +196,45 @@ honk-core delay <node> [-u|--url HOST:PORT]
 ### 重启要求
 
 [编译路由发布计数器](../design/routing.md#同步槽与原子发布)用尽后需要重启；它和普通 SIGHUP 及 DNS 运行时 reload 分开计数。
+
+### Root Android（arm64）
+
+`just build-android` 在构建时去除了 systemd 并使用系统默认分配器（stock allocator）；Android CI 工作流还会额外构建 jemalloc 变体（使用 `JEMALLOC_SYS_WITH_LG_PAGE=16` 和针对 libgcc 的 NDK libunwind shim 构建），本地 recipe 不会复现这些变体。eBPF 对象仍以 `bpfel-unknown-none` 目标编译，并嵌入 userspace 二进制。
+
+```bash
+export ANDROID_NDK_HOME=/opt/android-ndk
+just build-android
+adb push target/aarch64-linux-android/release/honk-core /data/adb/honk/honk-core
+adb shell su -c 'chmod 0755 /data/adb/honk/honk-core && /data/adb/honk/honk-core'
+```
+
+eBPF、TC、策略路由、透明套接字及可用的 NFQUEUE 都需要 root。设备必须运行
+Linux 6.12 或更新版本，提供 `/sys/kernel/btf/vmlinux`（或设置
+`HONK_VMLINUX_BTF`），并在 `/sys/fs/bpf` 挂载可写 bpffs。内核配置还必须提供
+内嵌对象使用的 hook 与 helper（TCX、`sk_lookup`、`sock_ops`、cgroup-BPF、BTF
+及所需 BPF helper）；Android 的 SELinux 策略必须允许 root 域使用它们。完整数据
+面实际至少需要 `CAP_BPF`、`CAP_NET_ADMIN` 和（用于 namespace/mount 设置的）
+`CAP_SYS_ADMIN`。将配置和 GeoIP/Geosite 资源放在 `/data/adb/honk` 下，或传入
+显式的 `--config` 与 `global.data_dir`。Android 没有 systemd 通知 socket，需要
+由调用方（例如 root shell 或 init 服务）负责进程监管。如果设备缺少
+NFQUEUE/nftables 支持，请设置
+`global.nfqueue_enable: false`；现有启动预检也会在队列不可用时降级，而不关闭
+eBPF 数据面。Android 的 namespace 兼容 bind mount 位于 `/data/adb/honk/netns`；
+如果 Android 拒绝这个可选挂载，引擎仍使用 FD 持有 namespace。
+
+6.12 基线是有意保留的，并非只看版本号：当前对象依赖 TCX、`sk_lookup`、
+`sock_ops`、cgroup storage 以及由 BTF 支持的 map 来发布编译路由。未来可以通过
+能力探测增加使用独立 `socket_assign`/`clsact` 对象、ABI 和清理路径的低版本
+Android profile；在没有这套替代数据面的情况下直接降低最低版本是不安全的，
+本分支不宣称支持这种用法。
+
+Android 没有 `/etc/resolv.conf`，因此当需要解析节点或 DNS 上游的主机名时，请配置 `global.bootstrap_resolver`；否则 bootstrap 解析会失败并报错 "no numeric /etc/resolv.conf nameserver; set global.bootstrap_resolver"。honk 不使用 Bionic/netd，因为其查询请求不携带 honk 的 bypass mark。
+
+在 Android 上，如果所有已配置的接口都挂载失败（例如缺少 TCX 的厂商内核），启动将直接失败，而不是像 Linux 那样采用惰性绑定；部分接口挂载失败时仍像 Linux 一样降级运行。
+
+在 Android 上，`bpf_redirect_peer` 仅在配合 netkit `dae0` 对时使用；veth 对则使用普通重定向。
+
+Android 不读取 `TCP_INFO`，因此物理 TCP 载体在 Android 上不提供 Score 载体压力证据；QUIC 载体仍使用自身的监测。
 
 ## 环境变量
 

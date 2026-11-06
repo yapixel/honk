@@ -58,6 +58,33 @@ build-musl-native:
     cargo build --release -p honk-core --no-default-features --features "ebpf,native-api,rprx,jemalloc" --target x86_64-unknown-linux-musl
     @echo "Binary: target/x86_64-unknown-linux-musl/release/honk-core"
 
+# Build an arm64 Android binary for a rooted device. The Android NDK supplies
+# Bionic's linker and headers; the eBPF object remains the host-built,
+# target-independent object embedded by honk-core's build script. Android
+# deliberately uses the stock allocator because jemalloc's native build is
+# not part of the supported NDK toolchain.
+build-android:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to an Android NDK directory}"
+    api="${ANDROID_API:-35}"
+    host_tag="${ANDROID_NDK_HOST_TAG:-linux-x86_64}"
+    toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$host_tag"
+    clang="$toolchain/bin/aarch64-linux-android${api}-clang"
+    test -x "$clang" || { echo "missing Android NDK compiler: $clang" >&2; exit 1; }
+    command -v rustup >/dev/null || { echo "rustup is required to install the Android Rust target" >&2; exit 1; }
+    rustup target list --installed | grep -qx aarch64-linux-android \
+        || { echo "install the Rust target first: rustup target add aarch64-linux-android" >&2; exit 1; }
+    CC_aarch64_linux_android="$clang" \
+    CXX_aarch64_linux_android="$toolchain/bin/aarch64-linux-android${api}-clang++" \
+    AR_aarch64_linux_android="$toolchain/bin/llvm-ar" \
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$clang" \
+    BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android${api} --sysroot=$toolchain/sysroot" \
+    cargo build --release -p honk-core --no-default-features \
+        --features "clash-api,native-api,ebpf,rprx" \
+        --target aarch64-linux-android
+    echo "Binary: target/aarch64-linux-android/release/honk-core"
+
 # Build eBPF object standalone (optional; honk-core build.rs auto-builds it)
 # NOTE: an environment RUSTFLAGS overrides crates/honk-ebpf/.cargo/config.toml
 # rustflags (--btf, debuginfo) — the object then silently loses its .BTF

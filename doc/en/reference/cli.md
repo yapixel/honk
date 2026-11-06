@@ -14,7 +14,7 @@ honk-core [OPTIONS] [COMMAND]
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `-c`, `--config PATH` | Omitted; `/etc/honk/config.dae` | Configuration entry file. See [`--config`](#--config). |
+| `-c`, `--config PATH` | Omitted; `/etc/honk/config.dae` (Linux), `/data/adb/honk/config.dae` (Android) | Configuration entry file. See [`--config`](#--config). |
 | `--log-file PATH` | Omitted; unset | Override `global.log_file` for this engine process. See [`--log-file`](#--log-file). |
 | `-b`, `--bpf-object PATH` | Omitted; embedded object | Replace the object embedded by an `ebpf` build; only the real backend reads it. |
 | `--bpf-pin-root PATH` | Omitted; `/sys/fs/bpf` | Root for pinned eBPF maps, passed to the real backend. |
@@ -22,7 +22,7 @@ honk-core [OPTIONS] [COMMAND]
 | `-d`, `--debug` | Omitted; off | Use `debug` as the default console filter when `RUST_LOG` gives no valid filter. |
 | `--mock-ebpf` | Omitted; off | Use `MockEbpfBackend` instead of loading kernel eBPF. See [`--mock-ebpf`](#--mock-ebpf). |
 | `--store file\|db` | Omitted; `file` | Run from the revisions in `<data-dir>/state/honk.db`. See [`--store`](#--store). |
-| `--data-dir PATH` | Omitted; `/var/lib/honk` | Data directory holding `state/honk.db`. See [`--data-dir`](#--data-dir). |
+| `--data-dir PATH` | Omitted; `/var/lib/honk` (Linux), `/data/adb/honk` (Android) | Data directory holding `state/honk.db`. See [`--data-dir`](#--data-dir). |
 
 Both binaries provide `-h`/`--help` and `-v`/`--version`.
 
@@ -131,7 +131,7 @@ With `--store db`, `proxy` and `delay` read the active revision and need a `nati
 honk-core reload
 ```
 
-Reads the PID from the locked `/run/honk-core.lock` and sends `SIGHUP`.
+Reads the PID from the locked `/run/honk-core.lock` (Linux) or `/data/adb/honk/honk-core.lock` (Android) and sends `SIGHUP`.
 
 It reports successful signal delivery only. The running process later logs `applied` or `rejected`. Mock instances do not own the lock.
 
@@ -196,6 +196,50 @@ The dial is not proxied and is not an HTTP URLTest. No running engine is contact
 ### Restart requirements
 
 An exhausted [compiled-routing publication counter](../design/routing.md#synchronous-slots-and-atomic-publication) requires a restart. This is separate from ordinary SIGHUP and DNS runtime reloads.
+
+### Rooted Android (arm64)
+
+`just build-android` builds without systemd and with the stock allocator; the Android CI workflow additionally produces jemalloc variants (built with `JEMALLOC_SYS_WITH_LG_PAGE=16` and an NDK libunwind shim for libgcc), which the local recipe does not reproduce. The eBPF object is still compiled for `bpfel-unknown-none` and embedded in the userspace binary.
+
+```bash
+export ANDROID_NDK_HOME=/opt/android-ndk
+just build-android
+adb push target/aarch64-linux-android/release/honk-core /data/adb/honk/honk-core
+adb shell su -c 'chmod 0755 /data/adb/honk/honk-core && /data/adb/honk/honk-core'
+```
+
+Root is required for eBPF, TC, policy routing, transparent sockets and any
+available NFQUEUE setup. The device must run Linux 6.12 or newer, expose
+`/sys/kernel/btf/vmlinux` (or set `HONK_VMLINUX_BTF`), and have a writable
+bpffs mounted at `/sys/fs/bpf`. The kernel configuration must also provide
+the hooks and helpers used by the embedded object (TCX, `sk_lookup`,
+`sock_ops`, cgroup-BPF, BTF and the required BPF helpers); Android's SELinux
+policy must permit the root domain to use them. `CAP_BPF`, `CAP_NET_ADMIN` and
+`CAP_SYS_ADMIN` (for namespace/mount setup) are the practical minimums for
+the full datapath. Install the configuration and GeoIP/Geosite assets below
+`/data/adb/honk`, or pass explicit `--config` and `global.data_dir` paths.
+Android has no systemd notification socket; process supervision is provided by
+the caller (for example, a root shell or init service). If Android lacks
+NFQUEUE/nftables support, set
+`global.nfqueue_enable: false`; the existing startup preflight also downgrades
+an unavailable queue without disabling the eBPF datapath. The Android
+namespace compatibility bind mount lives under `/data/adb/honk/netns`; the
+engine remains FD-owned if Android refuses that optional mount.
+
+The 6.12 baseline is intentional rather than a version-only probe: the current
+object publishes compiled routing through TCX, `sk_lookup`, `sock_ops`, cgroup
+storage and BTF-backed maps. A lower-kernel Android profile can be added later
+with capability probing and a separate `socket_assign`/`clsact` object, ABI and
+cleanup path; changing this minimum without that alternate datapath would be
+unsafe and is not supported by this branch.
+
+Android has no `/etc/resolv.conf`, so set `global.bootstrap_resolver` when node or DNS upstream hostnames must be resolved; otherwise bootstrap resolution fails with "no numeric /etc/resolv.conf nameserver; set global.bootstrap_resolver". Bionic/netd is not used because its queries do not carry honk's bypass mark.
+
+On Android, startup fails if every configured interface fails to attach (for example a vendor kernel without TCX), instead of the lazy binding Linux uses; partial failures still degrade as on Linux.
+
+On Android, `bpf_redirect_peer` is used only with a netkit `dae0` pair; a veth pair uses ordinary redirect.
+
+Android does not read `TCP_INFO`, so physical TCP carriers contribute no Score carrier-pressure evidence there; QUIC carriers keep their own monitor.
 
 ## Environment variables
 

@@ -752,7 +752,9 @@ admission 的结果是 `{operation_id,kind,status,href}`。轮询 `href` 返回�
 
 ### 配置数据库（`--store db`）
 
-`honk-core --store db` 把受管理的 `.dae` 源以修订形式存进状态数据库 `<data_dir>/state/honk.db`。`data_dir` 取自 `--data-dir`（默认 `/var/lib/honk`），必须与 `global.data_dir` 一致，不会退回工作目录。`state` 目录权限 0700，文件 0600；两者都属于守护进程用户，且不能是符号链接。
+### 配置数据库（`--store db`）
+
+`honk-core --store db` 将受管的 `.dae` 源作为修订版本保存在状态数据库 `<data_dir>/state/honk.db` 中。Linux 上 `data_dir` 默认值为 `/var/lib/honk`，Android 上为 `/data/adb/honk`。
 
 启动时，或执行 `honk-core admin reset` 时，如果这两者属于守护进程用户、只是多了组或其他用户的读和执行权限，honk 会去掉这些权限并记一条 warning。其他情况一律拒绝，组或其他用户可以写时也一样。`config export` 和其他离线读取遇到 0700 与 0600 以外的权限时一律拒绝，也不改权限。
 

@@ -141,13 +141,9 @@ URL 带引号时，紧贴结束引号或完整 `(UA)` 后缀的 `#` 会被当作
 
 | 属性 | 当前行为 |
 | --- | --- |
-| 位置 | 状态数据库 `<data_dir>/state/honk.db` 里的 `subscription_body` 表。文件权限 0600，目录 0700，见 [API 参考](./api.md#配置数据库--store-db)。`data_dir` 默认是 `/var/lib/honk`。 |
-| Key | 对带长度边界的 URL、配置里的 user agent 覆盖值，以及有序的 header key/value 对计算 SHA-256，再用 URL-safe Base64 编码并加上 `.sub`。user agent 覆盖值未设置或为空时，按空值参与计算。版本化的默认请求 UA 不参与计算，所以默认订阅升级后仍能沿用已存正文。请求身份不会以明文暴露。 |
-| 写入边界 | HTTP 请求成功且正文通过导入校验后，honk 在一个事务里保存完整的原始响应，被拒绝的条目也算在内。 |
-| 容量限制 | 单个正文最多 8 MiB，全部正文合计最多 32 MiB。写入会让总量超过 32 MiB 时，honk 先删除已停用订阅的正文；仍然超出就拒绝写入，保留原正文，并在本次拉取中报告 `subscription-store-write-failed`。订阅连续两次维护都没启用时，honk 删掉它的正文；维护每 60 秒一次。启动时 `store_subscribe: false`，但因 `cache_file`、`password_auth` 或 `--store db` 仍打开了状态数据库时，honk 会清空该表。 |
-| 从 `.sub` 升级 | 取得实例锁后，honk 导入符合条件的旧正文，步骤见下文。 |
-| 重定向 | 最多 5 跳。从 `https` 重定向到其他 scheme，本次拉取失败。重定向到 loopback、私有、链路本地或未指定的字面地址，也同样失败，除非配置的 URL 自己就用了该地址。解析到这类地址的主机名不在检查范围内。 |
-| 正文大小 | 最多 8 MiB，在读取过程中判定，不等整个正文缓冲完。 |
+| 属性 | 当前行为 |
+| --- | --- |
+| 位置 | 状态数据库 `<data_dir>/state/honk.db` 里的 `subscription_body` 表。文件权限 0600，目录 0700，见 [API 参考](./api.md#配置数据库--store-db)。`data_dir` 在 Linux 上默认是 `/var/lib/honk`，在 Android 上是 `/data/adb/honk`。 |
 
 启动时，honk 取得实例锁，然后按下面的步骤导入旧 `.sub` 存储：
 

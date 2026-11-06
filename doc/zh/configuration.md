@@ -55,7 +55,7 @@ include {
 
 ## 运行时数据目录
 
-`global.data_dir` 是运行时状态和相对运行时资源的进程级根目录，默认 `/var/lib/honk`，必须是非空绝对路径。修改后要重启。
+`global.data_dir` 是运行时状态和相对运行时资源的进程级根目录，Linux 默认值为 `/var/lib/honk`，Android 默认值为 `/data/adb/honk`，必须是非空绝对路径。修改后要重启。
 
 启动时，honk 递归创建目录，然后新建并删除一个私有文件，检查目录能不能用。`data_dir` 不可用时，只有通过同一检查的工作目录才能作为回退；`--store db` 和启用的原生 API 密码登录不允许这种回退。
 
