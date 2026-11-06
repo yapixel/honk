@@ -90,6 +90,7 @@ EOF
     AR_aarch64_linux_android="$toolchain/bin/llvm-ar" \
     CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$clang" \
     BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android${api} --sysroot=$toolchain/sysroot" \
+    BORING_BSSL_RUST_CPPLIB_aarch64_linux_android="c++_static" \
     CMAKE_TOOLCHAIN_FILE="$wrapper" \
     ANDROID_ABI="arm64-v8a" \
     ANDROID_PLATFORM="android-${api}" \
