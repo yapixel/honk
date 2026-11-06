@@ -18,6 +18,15 @@ pub(crate) struct InterfaceHandoff {
     pub(super) state: InterfaceState,
 }
 
+fn android_startup_binding_failure(
+    android: bool,
+    requested: usize,
+    owned: usize,
+    failed: usize,
+) -> bool {
+    android && requested != 0 && owned == 0 && failed == requested
+}
+
 /// Fails only when the topology cannot be read (after the bounded dump retry),
 /// the default route cannot be read for an `auto` entry, or `load` fails.
 #[allow(clippy::too_many_arguments)]
@@ -67,11 +76,12 @@ pub(crate) async fn start_interfaces(
     // fires when the resolved plan had bindings and every one failed before
     // the first owner was published.  Partial failures remain observable via
     // the existing degradation and watcher retry path.
-    if cfg!(target_os = "android")
-        && !plan.bindings.is_empty()
-        && backend.owned_bindings().next().is_none()
-        && report.failed.len() == plan.bindings.len()
-    {
+    if android_startup_binding_failure(
+        cfg!(target_os = "android"),
+        plan.bindings.len(),
+        backend.owned_bindings().count(),
+        report.failed.len(),
+    ) {
         anyhow::bail!(
             "{}",
             concat!(
@@ -97,6 +107,20 @@ pub(crate) async fn start_interfaces(
             state,
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::android_startup_binding_failure;
+
+    #[test]
+    fn android_only_fails_when_every_requested_binding_failed() {
+        assert!(android_startup_binding_failure(true, 2, 0, 2));
+        assert!(!android_startup_binding_failure(false, 2, 0, 2));
+        assert!(!android_startup_binding_failure(true, 0, 0, 0));
+        assert!(!android_startup_binding_failure(true, 2, 1, 2));
+        assert!(!android_startup_binding_failure(true, 2, 0, 1));
+    }
 }
 
 /// Startup writes run on the startup task (the only place besides the watcher's

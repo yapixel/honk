@@ -14,7 +14,12 @@ fn set_sysctl_at(key: &str, value: &str, path: &str) -> anyhow::Result<()> {
     if let Err(e) = std::fs::write(path, format!("{}\n", value)) {
         let output = std::process::Command::new("sysctl")
             .args(["-w", &format!("{}={}", key, value)])
-            .output()?;
+            .output()
+            .map_err(|fallback| {
+                anyhow::anyhow!(
+                    "write /proc/sys for {key}={value} failed ({e}); sysctl fallback unavailable: {fallback}"
+                )
+            })?;
         if !output.status.success() {
             anyhow::bail!(
                 "sysctl -w {}={} failed: {} (proc write also failed: {})",
