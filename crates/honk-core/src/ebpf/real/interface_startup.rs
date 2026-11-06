@@ -60,6 +60,26 @@ pub(crate) async fn start_interfaces(
             Err(error) => state.step_failed(ReconcileStep::Topology, &error),
         }
     }
+    // Android builds must not report a running datapath when every requested
+    // TC attachment was rejected.  A vendor kernel without TCX otherwise
+    // leaves the control plane alive while all traffic bypasses interception.
+    // Keep the documented pending/empty-interface behavior: this guard only
+    // fires when the resolved plan had bindings and every one failed before
+    // the first owner was published.  Partial failures remain observable via
+    // the existing degradation and watcher retry path.
+    if cfg!(target_os = "android")
+        && !plan.bindings.is_empty()
+        && backend.owned_bindings().next().is_none()
+        && report.failed.len() == plan.bindings.len()
+    {
+        anyhow::bail!(
+            "{}",
+            concat!(
+                "Android eBPF datapath could not attach any configured interface; ",
+                "the kernel likely lacks TCX support (no traffic will be intercepted)"
+            )
+        );
+    }
     let owned: Vec<_> = backend
         .owned_bindings()
         .map(|binding| binding.key())
