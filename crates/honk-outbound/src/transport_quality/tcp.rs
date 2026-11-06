@@ -204,12 +204,12 @@ fn unknown_sample(at: Instant) -> CarrierSample {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(not(target_os = "linux"))]
 fn read_sample(_socket: &TcpStream, at: Instant) -> CarrierSample {
     unknown_sample(at)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn read_sample(socket: &TcpStream, at: Instant) -> CarrierSample {
     use std::os::fd::{AsFd, AsRawFd};
 
@@ -235,7 +235,7 @@ fn read_sample(socket: &TcpStream, at: Instant) -> CarrierSample {
     sample_from_info(&info, length as usize, at)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn sample_from_info(info: &libc::tcp_info, length: usize, at: Instant) -> CarrierSample {
     macro_rules! field {
         ($field:ident) => {
