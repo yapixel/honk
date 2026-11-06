@@ -82,12 +82,21 @@ pub(crate) async fn start_interfaces(
         backend.owned_bindings().count(),
         report.failed.len(),
     ) {
+        let detail = report
+            .failed
+            .iter()
+            .take(3)
+            .map(|(binding, error)| {
+                format!(
+                    "{} {}: {error:#}",
+                    binding.interface,
+                    binding.program.name()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         anyhow::bail!(
-            "{}",
-            concat!(
-                "Android eBPF datapath could not attach any configured interface; ",
-                "the kernel likely lacks TCX support (no traffic will be intercepted)"
-            )
+            "Android eBPF datapath could not attach any configured interface (no traffic will be intercepted): {detail}"
         );
     }
     let owned: Vec<_> = backend
