@@ -54,22 +54,29 @@ impl RealEbpfBackend {
         let (dae0_ifindex, dae0peer_ifindex, dae0peer_mac) =
             (dae0.ifindex(), dae0.peer_ifindex(), dae0.peer_mac());
         let wan_ifindex = 0u32;
-        // Enable bpf_redirect_peer on kernels >= 6.8, and also on backported
+        // Enable bpf_redirect_peer only for a real netkit dae0 pair on kernels
+        // >= 6.8, and also on backported
         // LTS kernels that received the CVE-2024-37959 fix:
         //   5.15.164+, 6.1.99+, 6.6.40+
         // https://www.kernel.org/doc/Documentation/networking/netkit.rst
         let use_redirect_peer = match kernel_version() {
             Some((major, minor, patch)) => {
-                let enabled = (major > 6 || (major == 6 && minor >= 8))   // >= 6.8
+                let kernel_support = (major > 6 || (major == 6 && minor >= 8))   // >= 6.8
                     || (major == 5 && minor == 15 && patch >= 164)        // >= 5.15.164
                     || (major == 6 && minor == 1 && patch >= 99)          // >= 6.1.99
                     || (major == 6 && minor == 6 && patch >= 40); // >= 6.6.40
+                let enabled = dae0.supports_redirect_peer() && kernel_support;
                 if enabled {
                     info!(
                         "Kernel {}.{}.{} supports bpf_redirect_peer, enabling",
                         major, minor, patch
                     );
                     1u8
+                } else if !dae0.supports_redirect_peer() {
+                    info!(
+                        "dae0 uses a veth pair; bpf_redirect_peer is disabled and ordinary redirect will be used"
+                    );
+                    0u8
                 } else {
                     info!(
                         "Kernel {}.{}.{} does not support bpf_redirect_peer, disabled",

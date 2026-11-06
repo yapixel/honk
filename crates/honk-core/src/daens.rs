@@ -17,6 +17,7 @@ pub struct Dae0Setup {
     ifindex: u32,
     peer_ifindex: u32,
     peer_mac: [u8; 6],
+    link_kind: netlink::LinkPairKind,
 }
 
 #[cfg(feature = "ebpf")]
@@ -33,7 +34,16 @@ impl Dae0Setup {
         self.peer_mac
     }
 
-    fn new(ifindex: u32, peer_ifindex: u32, peer_mac: [u8; 6]) -> anyhow::Result<Self> {
+    pub fn supports_redirect_peer(&self) -> bool {
+        matches!(self.link_kind, netlink::LinkPairKind::Netkit)
+    }
+
+    fn new(
+        ifindex: u32,
+        peer_ifindex: u32,
+        peer_mac: [u8; 6],
+        link_kind: netlink::LinkPairKind,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(ifindex != 0, "dae0 has no valid ifindex");
         anyhow::ensure!(peer_ifindex != 0, "dae0peer has no valid ifindex");
         anyhow::ensure!(peer_mac != [0; 6], "dae0peer has an all-zero MAC address");
@@ -41,20 +51,29 @@ impl Dae0Setup {
             ifindex,
             peer_ifindex,
             peer_mac,
+            link_kind,
         })
     }
 
     /// Read through the netlink socket's own namespace, never sysfs (whose
     /// view is per-mount and ignores a scoped setns).
-    fn read_links(nl: &mut netlink::NlSock, dae0: &str, peer: &str) -> anyhow::Result<Self> {
+    fn read_links(
+        nl: &mut netlink::NlSock,
+        dae0: &str,
+        peer: &str,
+        link_kind: netlink::LinkPairKind,
+    ) -> anyhow::Result<Self> {
         use anyhow::Context as _;
         let (ifindex, _) = nl.get_link(dae0).with_context(|| format!("read {dae0}"))?;
         let (peer_ifindex, peer_mac) = nl.get_link(peer).with_context(|| format!("read {peer}"))?;
-        Self::new(ifindex, peer_ifindex, peer_mac)
+        Self::new(ifindex, peer_ifindex, peer_mac, link_kind)
     }
 
-    pub(crate) fn read(nl: &mut netlink::NlSock) -> anyhow::Result<Self> {
-        Self::read_links(nl, "dae0", "dae0peer")
+    pub(crate) fn read(
+        nl: &mut netlink::NlSock,
+        link_kind: netlink::LinkPairKind,
+    ) -> anyhow::Result<Self> {
+        Self::read_links(nl, "dae0", "dae0peer", link_kind)
     }
 }
 
@@ -111,7 +130,7 @@ pub(crate) fn create_dae0_link() -> anyhow::Result<(Dae0Guard, Dae0Setup)> {
         .map_err(|e| anyhow::anyhow!("failed to add dae0 link pair: {e}"))?;
     info!(kind = ?link_kind, "Created dae0/dae0peer link pair");
 
-    let setup = Dae0Setup::read(&mut nl)?;
+    let setup = Dae0Setup::read(&mut nl, link_kind)?;
     let (dae0_idx, peer_idx) = (setup.ifindex(), setup.peer_ifindex());
 
     // These are datapath-critical: a "successful" startup without them is
@@ -678,8 +697,8 @@ pub(crate) fn create_test_dae0_pair() -> anyhow::Result<(Dae0Guard, Dae0Setup)> 
     if let Ok((stale, _)) = nl.get_link("dae0") {
         nl.del_link(stale)?;
     }
-    nl.add_link_pair("dae0", "dae0peer")?;
-    let setup = Dae0Setup::read(&mut nl)?;
+    let link_kind = nl.add_link_pair("dae0", "dae0peer")?;
+    let setup = Dae0Setup::read(&mut nl, link_kind)?;
     Ok((
         Dae0Guard {
             ifindex: setup.ifindex(),
@@ -695,29 +714,56 @@ mod tests {
     #[test]
     fn setup_rejects_zero_ifindex_and_zero_mac() {
         let mac = [0x02, 0, 0, 0, 0, 1];
-        assert!(Dae0Setup::new(1, 2, mac).is_ok());
-        assert!(Dae0Setup::new(0, 2, mac).is_err());
-        assert!(Dae0Setup::new(1, 0, mac).is_err());
-        assert!(Dae0Setup::new(1, 2, [0; 6]).is_err());
+        assert!(Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Netkit).is_ok());
+        assert!(Dae0Setup::new(0, 2, mac, netlink::LinkPairKind::Netkit).is_err());
+        assert!(Dae0Setup::new(1, 0, mac, netlink::LinkPairKind::Netkit).is_err());
+        assert!(Dae0Setup::new(1, 2, [0; 6], netlink::LinkPairKind::Netkit).is_err());
+    }
+
+    #[test]
+    fn redirect_peer_requires_netkit_pair() {
+        let mac = [0x02, 0, 0, 0, 0, 1];
+        assert!(Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Netkit)
+            .unwrap()
+            .supports_redirect_peer());
+        assert!(!Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Veth)
+            .unwrap()
+            .supports_redirect_peer());
     }
 
     #[test]
     fn read_links_reports_missing_link_and_zero_mac() {
         let mut nl = netlink::NlSock::new().expect("netlink socket");
-        let missing = Dae0Setup::read_links(&mut nl, "honk-no-such0", "lo")
+        let missing = Dae0Setup::read_links(
+            &mut nl,
+            "honk-no-such0",
+            "lo",
+            netlink::LinkPairKind::Veth,
+        )
             .expect_err("missing dae0 must fail");
         assert!(
             format!("{missing:#}").contains("honk-no-such0"),
             "{missing:#}"
         );
-        let missing_peer = Dae0Setup::read_links(&mut nl, "lo", "honk-no-such1")
+        let missing_peer = Dae0Setup::read_links(
+            &mut nl,
+            "lo",
+            "honk-no-such1",
+            netlink::LinkPairKind::Veth,
+        )
             .expect_err("missing dae0peer must fail");
         assert!(
             format!("{missing_peer:#}").contains("honk-no-such1"),
             "{missing_peer:#}"
         );
         // `lo` exists with a nonzero ifindex but an all-zero MAC.
-        let zero_mac = Dae0Setup::read_links(&mut nl, "lo", "lo").expect_err("zero MAC must fail");
+        let zero_mac = Dae0Setup::read_links(
+            &mut nl,
+            "lo",
+            "lo",
+            netlink::LinkPairKind::Veth,
+        )
+        .expect_err("zero MAC must fail");
         assert!(format!("{zero_mac:#}").contains("MAC"), "{zero_mac:#}");
     }
 }
