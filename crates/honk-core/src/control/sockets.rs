@@ -144,7 +144,7 @@ pub(super) fn set_so_mark(fd: &impl std::os::fd::AsFd, mark: u32) -> io::Result<
 
 #[cfg(target_os = "android")]
 pub(super) fn set_so_mark(fd: &impl std::os::fd::AsFd, mark: u32) -> io::Result<()> {
-    use std::os::fd::{AsFd as _, AsRawFd as _};
+    use std::os::fd::AsRawFd as _;
 
     // SAFETY: the fd is borrowed for this call and the option points to a
     // live integer with the declared length.
