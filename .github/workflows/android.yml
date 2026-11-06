@@ -67,7 +67,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: android-aarch64-ndk-${{ env.ANDROID_NDK_VERSION }}
+          # The CMake toolchain wrapper below is part of the ABI contract.  Keep
+          # old native build trees from reusing a BoringSSL configured before it
+          # was introduced.
+          key: android-aarch64-ndk-${{ env.ANDROID_NDK_VERSION }}-cmake2
           cache-on-failure: true
           workspaces: |
             . -> target
@@ -96,13 +99,24 @@ jobs:
           toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           clang="$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang"
           sysroot="$toolchain/sysroot"
+          wrapper="$RUNNER_TEMP/android.toolchain.wrapper.cmake"
           test -x "$clang"
+          cat > "$wrapper" <<EOF
+          # Pin the ABI and platform before loading the NDK toolchain.  CMake
+          # projects such as boring-sys otherwise may configure their native
+          # objects for the host ABI while Rust links for Android arm64.
+          set(ANDROID_ABI "arm64-v8a" CACHE STRING "" FORCE)
+          set(ANDROID_PLATFORM "android-${ANDROID_API}" CACHE STRING "" FORCE)
+          set(CMAKE_ANDROID_ARCH_ABI "arm64-v8a" CACHE STRING "" FORCE)
+          set(CMAKE_SYSTEM_VERSION ${ANDROID_API} CACHE STRING "" FORCE)
+          include("$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake")
+          EOF
           echo "CC_aarch64_linux_android=$clang" >> "$GITHUB_ENV"
           echo "CXX_aarch64_linux_android=$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$toolchain/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android${ANDROID_API} --sysroot=$sysroot" >> "$GITHUB_ENV"
-          echo "CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE=$wrapper" >> "$GITHUB_ENV"
           echo "ANDROID_ABI=arm64-v8a" >> "$GITHUB_ENV"
           echo "ANDROID_PLATFORM=android-${ANDROID_API}" >> "$GITHUB_ENV"
 
