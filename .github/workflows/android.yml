@@ -1,0 +1,128 @@
+name: Android arm64
+
+on:
+  push:
+    branches: [codex-android]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_API: "35"
+  ANDROID_NDK_VERSION: "27.2.12479018"
+
+jobs:
+  build:
+    name: build aarch64-linux-android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read Rust toolchains
+        id: toolchain
+        run: |
+          set -euo pipefail
+          echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+          echo "ebpf=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' crates/honk-ebpf/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust stable with Android target
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
+          target: aarch64-linux-android
+
+      - name: Install Rust nightly for the eBPF object
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.ebpf }}
+          components: rust-src, llvm-tools
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+
+      - name: Install Android NDK and build dependencies
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is not set}}"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-${ANDROID_API}" "ndk;${ANDROID_NDK_VERSION}"
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev pkg-config cmake libclang-dev zstd
+          ndk="$sdk_root/ndk/$ANDROID_NDK_VERSION"
+          test -x "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ndk" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: android-aarch64
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            crates/honk-ebpf -> target
+
+      - name: Install pinned bpf-linker
+        run: |
+          set -euo pipefail
+          source .github/ci/pins.env
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v$BPF_LINKER_VERSION/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "$BPF_LINKER_SHA256  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          zstd -dc "$RUNNER_TEMP/bpf-linker.tar.zst" | tar -xf - -C "$CARGO_HOME/bin"
+          bpf-linker --version
+
+      - name: Build and verify the eBPF object
+        working-directory: crates/honk-ebpf
+        run: |
+          set -euo pipefail
+          cargo build --release -Zbuild-std=core --target bpfel-unknown-none
+          readelf -S target/bpfel-unknown-none/release/honk-ebpf | grep -q '\.BTF'
+
+      - name: Configure the Android target toolchain
+        run: |
+          set -euo pipefail
+          toolchain="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          clang="$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang"
+          sysroot="$toolchain/sysroot"
+          test -x "$clang"
+          echo "CC_aarch64_linux_android=$clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$toolchain/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android${ANDROID_API} --sysroot=$sysroot" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" >> "$GITHUB_ENV"
+          echo "ANDROID_ABI=arm64-v8a" >> "$GITHUB_ENV"
+          echo "ANDROID_PLATFORM=android-${ANDROID_API}" >> "$GITHUB_ENV"
+
+      - name: Build honk-core for rooted Android
+        run: |
+          set -euo pipefail
+          cargo build --release -p honk-core --no-default-features \
+            --features "clash-api,native-api,ebpf,rprx" \
+            --target aarch64-linux-android
+
+      - name: Package Android binary
+        run: |
+          set -euo pipefail
+          name=honk-core-android-aarch64
+          mkdir -p "dist/$name"
+          cp target/aarch64-linux-android/release/honk-core "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          chmod 0755 "dist/$name/honk-core"
+          tar -czf "$name.tar.gz" -C dist "$name"
+          sha256sum "$name.tar.gz" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android binary artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: honk-core-android-aarch64
+          path: honk-core-android-aarch64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
