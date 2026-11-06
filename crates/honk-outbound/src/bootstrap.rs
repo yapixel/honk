@@ -177,11 +177,7 @@ where
             "Android system resolver returned no addresses for '{}'",
             host
         ),
-        Err(error) => tracing::debug!(
-            "Android system resolver failed for '{}': {}",
-            host,
-            error
-        ),
+        Err(error) => tracing::debug!("Android system resolver failed for '{}': {}", host, error),
     }
     let server = system_nameserver().ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "no numeric system DNS nameserver")

@@ -740,14 +740,14 @@ mod tests {
         let mut nl = netlink::NlSock::new().expect("netlink socket");
         let missing =
             Dae0Setup::read_links(&mut nl, "honk-no-such0", "lo", netlink::LinkPairKind::Veth)
-            .expect_err("missing dae0 must fail");
+                .expect_err("missing dae0 must fail");
         assert!(
             format!("{missing:#}").contains("honk-no-such0"),
             "{missing:#}"
         );
         let missing_peer =
             Dae0Setup::read_links(&mut nl, "lo", "honk-no-such1", netlink::LinkPairKind::Veth)
-            .expect_err("missing dae0peer must fail");
+                .expect_err("missing dae0peer must fail");
         assert!(
             format!("{missing_peer:#}").contains("honk-no-such1"),
             "{missing_peer:#}"
