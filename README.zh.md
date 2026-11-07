@@ -102,7 +102,7 @@ Copyright (c) 2025, glassyiris <honk@catmint.cc> and honk contributors
 
 ### 第三方声明
 
-`crates/honk-outbound/src/proxy/snell/` 中的 Snell 编解码与 simple-obfs 客户端移植自 [meow-rs](https://github.com/meow-rs/meow-rs)，其 Snell 客户端源自 [opensnell](https://github.com/missuo/opensnell)（GPL-3.0）。meow-rs 依以下许可证分发：
+`crates/honk-outbound/src/proxy/snell/` 中的 Snell 编解码与 simple-obfs 客户端移植自 [meow-rs](https://github.com/meow-rs/meow-rs)，其 Snell 客户端源自 [opensnell](https://github.com/missuo/opensnell)（GPLv3）。opensnell 的 TCP 协议层移植自 [mihomo](https://github.com/MetaCubeX/mihomo)（GPL-3.0，PR #2817），obfs 代码源自 open-snell / [clash](https://github.com/Dreamacro/clash) 项目。这些 GPL 授权部分在本仓库中按 GPL-3.0-only 分发，下方 MIT 许可不能取代该义务。meow-rs 依以下许可证分发：
 
 ```text
 Copyright (c) 2026 Max Lv

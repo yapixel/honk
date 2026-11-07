@@ -34,6 +34,7 @@
 | 协议族 | `proxy/shadowsocks/{mod,aead2022,stream}.rs`；`proxy/vless/{mod,handler,mux,cool,encryption}.rs` |
 | QUIC | `quic/{path_health,flow_control,metrics,endpoint,client,stream,boring}.rs` |
 | AnyTLS | `proxy/anytls/{padding,writer,overflow}.rs` |
+| Snell | `proxy/snell/{mod,aead,cipher,handler,obfs,pool,protocol,udp,v3,v4,v6,v6_shape}.rs` |
 | Score 与健康 | `group/score/{evidence,ranking,feedback}.rs`；`alive/{health,urltest}.rs` |
 | Session pool | `session/{maintenance,speculative}.rs` |
 | Stream transport | `proxy/transport/{grpc,h2_io}.rs`；`proxy/transport/xhttp/{browser,preparation,request,response,runtime,session,stream,upload}.rs` |
@@ -109,6 +110,7 @@ native socket 包在 `PacketTransport` 后面；tunnel 协议在自己的真实 
 | --- | --- | --- | --- | --- | --- |
 | Shadowsocks（含 2022） | 是 | 否 | 是 | `None` | `ss` |
 | Trojan | `network` 缺省或包含 `udp` 时 | 仅 `tcp`/空 transport | XHTTP 之外 | `None` | `trojan` |
+| Snell | `network` 缺省或包含 `udp` 时 | 否 | 未启用 reuse 时 | `Snell` | 无 |
 | VMess | 否 | 否 | XHTTP 之外 | `None` | `vmess` |
 | VLESS | `network` 允许 UDP 时 | 否 | direct TCP path 且非 XHTTP | `Vless` | `vless` |
 | SOCKS5 | 是 | 是 | 是 | `None` | `socks5`、`socks4`、`socks4a` |
@@ -155,6 +157,7 @@ capability 拒绝，调用方可以继续回退到配置中的冷候选。显式
 | `socks5` | SOCKS CONNECT | RFC 1928 UDP association。每个客户端源有一条控制流和一个连接到中继的 socket，供其所有目的地共用。每个 header 写入自己的目的地，每个应答返回真实线上来源（IPv4-mapped IPv6 规范化为 IPv4）。域名来源仅在等于拨号域名且端口一致时才投影为捕获的目标，其他名字不经 DNS 直接丢弃。发送时只写入拨号域名，其他名字以数值目标发出。被截断、RSV 非零、分片（`FRAG != 0`）或域名不是 UTF-8 的中继 datagram 只丢弃该包并记 DEBUG；未知 ATYP 或控制流 EOF 结束 association。协商和认证、ASSOCIATE 请求和应答（含中继域名解析）各有五秒超时。 |
 | `ss` / Shadowsocks 2022 | Shadowsocks stream | Shadowsocks packet framing；每个客户端源一个已连接的服务端 socket 与加密状态，可发往任意目的地（见下文） |
 | `trojan` | 共享 transport 上的 Trojan stream | `network` 允许 UDP 时使用 Trojan UDP framing；每个客户端源一条 associate 流，每个 frame 自带对端地址 |
+| `snell` | Snell stream（可选 simple-obfs，v4+ 支持 TCP 连接复用） | `network` 允许 UDP 时在 TCP 流上使用 Snell UDP framing；每个客户端源一条 stream，每个 frame 自带对端地址 |
 | `vmess` | VMess stream | 未实现 |
 | `vless` | 由独立 multiplex policy 选择 direct、H2 或 Mux.Cool | `network` 允许 UDP 时可用；encoding 与可选 UDP multiplex 决定路径 |
 | `hysteria2` | QUIC stream | Hysteria2 QUIC datagram |
@@ -545,7 +548,7 @@ empty-first 或 poisoned-child 规则。request 和第一个 datagram 在一次�
 真实 sing-box 1.12.4 的 direct outbound 由第一个目的地决定形态。域名 request 之
 后，同名的逐包 FQDN 会被映射；数值 request 之后，逐包 FQDN 会报
 `invalid AddrPort: missing address`，并终止整个 association。H2MUX PacketAddr、
-AnyTLS、Trojan、SOCKS5 和 Shadowsocks 适用同一规则，即 `addr::dialed_name`。
+AnyTLS、Trojan、Snell、SOCKS5 和 Shadowsocks 适用同一规则，即 `addr::dialed_name`。
 Juicity 未改动，也无法验证，因为没有 juicity-server 可用。
 
 类型化的 policy、size 和 carrier-capacity 拒绝都是终态的本地结果，与拥塞或
@@ -609,11 +612,11 @@ Hysteria2 和 TUIC 的两种接收模式都用既有的有界重组器保留实�
 foreign IP。TUIC 的零长度 payload 仍是 datagram；Hysteria2 保留既有的空入站
 payload 拒绝。保留来源并不保证远端 NAT 的映射或过滤行为。
 
-`MultiTargetTransport` 是 Shadowsocks、Juicity、SOCKS5、Trojan、AnyTLS 和 VLESS
+`MultiTargetTransport` 是 Shadowsocks、Juicity、SOCKS5、Trojan、Snell、AnyTLS 和 VLESS
 UoT v2/H2MUX 共用的通用 source transport。Hysteria2、TUIC 和 VLESS XUDP/Mux.Cool
 保留具体分支，使发送路径不被装箱。每个客户端源为其所有目的地持有一条逻辑
 association：一个 Shadowsocks socket 与加密 session、一条 Juicity 双向流、一条
-SOCKS5 控制连接加一个中继 socket、一条 Trojan associate 流、一条 non-connect UoT
+SOCKS5 控制连接加一个中继 socket、一条 Trojan associate 流、一条 Snell UDP 流、一条 non-connect UoT
 v2 流，或一条 H2MUX PacketAddr 流。对 Shadowsocks 来说，SS2022 不会因为目的地变
 化而重置 session ID、包计数器或重放窗口。
 
@@ -624,7 +627,7 @@ DNS 直接丢弃，流式协议会整帧消费被丢弃的帧，再读下一帧�
 
 `send_packet` 和 `send_to` 共用一个未装箱 helper。`confirmed` 只在各 view 的首个
 datagram 上传给 transport 时设置；`admitted` 在 datagram 进入线路或 writer 队列
-时设置。对于可靠流 carrier，例如 Trojan、Juicity、AnyTLS、UoT 和 H2MUX，部分帧超
+时设置。对于可靠流 carrier，例如 Trojan、Snell、Juicity、AnyTLS、UoT 和 H2MUX，部分帧超
 时对整个 source 仍是终止性的，因此共用一条流的各目的地也共享队头阻塞和失败命运。
 H2MUX 只有在第一个分块交给 h2 时才 admit 该 datagram，并开始标记中毒。因此，任何
 字节入队前的流控等待超时属于包局部拥塞，流仍可继续使用。包局部拥塞只在 source 仍

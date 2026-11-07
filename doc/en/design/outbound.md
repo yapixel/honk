@@ -37,6 +37,7 @@ Implementations are split into ordinary Rust modules:
 | Protocol families | `proxy/shadowsocks/{mod,aead2022,stream}.rs`; `proxy/vless/{mod,handler,mux,cool,encryption}.rs` |
 | QUIC | `quic/{path_health,flow_control,metrics,endpoint,client,stream,boring}.rs` |
 | AnyTLS | `proxy/anytls/{padding,writer,overflow}.rs` |
+| Snell | `proxy/snell/{mod,aead,cipher,handler,obfs,pool,protocol,udp,v3,v4,v6,v6_shape}.rs` |
 | Score and health | `group/score/{evidence,ranking,feedback}.rs`; `alive/{health,urltest}.rs` |
 | Session pool | `session/{maintenance,speculative}.rs` |
 | Stream transports | `proxy/transport/{grpc,h2_io}.rs`; `proxy/transport/xhttp/{browser,preparation,request,response,runtime,session,stream,upload}.rs` |
@@ -111,6 +112,7 @@ the Trojan transport, affect capability or pooling. Trojan and AnyTLS share
 | --- | --- | --- | --- | --- | --- |
 | Shadowsocks, including 2022 | yes | no | yes | `None` | `ss` |
 | Trojan | when `network` is absent or contains `udp` | only `tcp`/empty transport | except XHTTP | `None` | `trojan` |
+| Snell | when `network` is absent or contains `udp` | no | unless reuse is enabled | `Snell` | none |
 | VMess | no | no | except XHTTP | `None` | `vmess` |
 | VLESS | when `network` allows UDP | no | direct TCP path except XHTTP | `Vless` | `vless` |
 | SOCKS5 | yes | yes | yes | `None` | `socks5`, `socks4`, `socks4a` |
@@ -166,6 +168,7 @@ is not interchangeable with missing UDP support.
 | `socks5` | SOCKS CONNECT | RFC 1928 UDP association with one control stream and one relay-connected socket per client source, shared by all its destinations. Each request header names its destination, and each reply returns the real wire source (IPv4-mapped IPv6 as IPv4). A domain source is accepted only as the dialed name on its port and projects to the captured target; any other name is dropped without DNS. On send, only the dialed name is written; any other name goes out as the numeric target. A truncated, nonzero-RSV, fragmented (`FRAG != 0`), or non-UTF-8-domain relay datagram is dropped on its own at DEBUG. An unknown ATYP or control EOF ends the association. Greeting/authentication and the ASSOCIATE request/reply, including relay DNS resolution, each have a five-second timeout |
 | `ss` / Shadowsocks 2022 | Shadowsocks stream | Shadowsocks packet framing; one connected server socket and crypto state per client source, usable for every destination (see below) |
 | `trojan` | Trojan stream over shared transport | Trojan UDP framing when `network` allows UDP; one associate stream per client source, each frame names its peer |
+| `snell` | Snell stream (optional simple-obfs, TCP reuse in v4+) | Snell UDP framing over a TCP stream when `network` allows UDP; one stream per client source, each frame names its peer |
 | `vmess` | VMess stream | Unimplemented |
 | `vless` | Direct, H2, or Mux.Cool from the independent multiplex policy | Available when `network` allows UDP; encoding and optional UDP multiplexing select the path |
 | `hysteria2` | QUIC stream | Hysteria2 QUIC datagrams |
@@ -643,7 +646,7 @@ Real sing-box 1.12.4 fixes its direct outbound's form by the first destination.
 After a domain request it maps the same name per datagram. After a numeric
 request, a per-packet FQDN fails with `invalid AddrPort: missing address` and
 ends the whole association. The same rule applies to H2MUX PacketAddr, AnyTLS,
-Trojan, SOCKS5, and Shadowsocks (`addr::dialed_name`). Juicity is unchanged and
+Trojan, Snell, SOCKS5, and Shadowsocks (`addr::dialed_name`). Juicity is unchanged and
 unverified, as no juicity-server is available.
 
 Typed policy, size, and carrier-capacity refusals are terminal local results,
@@ -722,13 +725,13 @@ keeps its existing rejection of empty inbound payloads. Source preservation does
 not guarantee remote NAT mapping or filtering behavior.
 
 `MultiTargetTransport` is the one generic source transport for Shadowsocks,
-Juicity, SOCKS5, Trojan, AnyTLS, and VLESS UoT v2/H2MUX. Hysteria2, TUIC, and
+Juicity, SOCKS5, Trojan, AnyTLS, Snell, and VLESS UoT v2/H2MUX. Hysteria2, TUIC, and
 VLESS XUDP/Mux.Cool keep their concrete arms, so their send path is not boxed.
 Each client source owns one logical association for all destinations. That
 association is one Shadowsocks socket and crypto session, one Juicity
 bidirectional stream, one SOCKS5 control connection with one relay socket, one
-Trojan associate stream, one non-connect UoT v2 stream, or one H2MUX PacketAddr
-stream. SS2022 never resets its session ID, packet counter, or replay windows
+Trojan associate stream, one Snell UDP stream, one non-connect UoT v2 stream, or
+one H2MUX PacketAddr stream. SS2022 never resets its session ID, packet counter, or replay windows
 per destination.
 
 `recv_packet` returns the real peer the server reports. An IPv4-mapped peer is
@@ -740,7 +743,7 @@ unboxed helper. `confirmed` reaches the transport only on each view's first
 datagram, and `admitted` is set when the datagram reached the wire path or the
 writer queue.
 
-For reliable-stream carriers (Trojan, Juicity, AnyTLS, UoT, H2MUX), a
+For reliable-stream carriers (Trojan, Snell, Juicity, AnyTLS, UoT, H2MUX), a
 partial-frame timeout stays terminal for the whole source. Destinations sharing
 a stream also share its head-of-line blocking and failure fate. H2MUX admits a
 datagram and starts its poison only when the first chunk is queued to h2. A

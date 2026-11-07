@@ -102,7 +102,7 @@ Copyright (c) 2025, glassyiris <honk@catmint.cc> and honk contributors
 
 ### Third-party notices
 
-The Snell codecs and simple-obfs client in `crates/honk-outbound/src/proxy/snell/` are ported from [meow-rs](https://github.com/meow-rs/meow-rs), whose Snell client is itself derived from [opensnell](https://github.com/missuo/opensnell) (GPL-3.0). meow-rs is distributed under the following license:
+The Snell codecs and simple-obfs client in `crates/honk-outbound/src/proxy/snell/` are ported from [meow-rs](https://github.com/meow-rs/meow-rs), whose Snell client is itself derived from [opensnell](https://github.com/missuo/opensnell) (GPLv3). opensnell ports its TCP protocol layer from [mihomo](https://github.com/MetaCubeX/mihomo) (GPL-3.0, PR #2817), and its obfs code originates from the open-snell / [clash](https://github.com/Dreamacro/clash) projects. Those GPL-licensed portions are distributed here under this repository's GPL-3.0-only license, which the MIT grant below does not replace. meow-rs is distributed under the following license:
 
 ```text
 Copyright (c) 2026 Max Lv
