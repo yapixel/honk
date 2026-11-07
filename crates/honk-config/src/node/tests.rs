@@ -658,7 +658,13 @@ fn test_snell_obfs_identity_and_wire_roundtrip() {
     }
     node2.id = node2.derive_id();
 
-    assert_eq!(node1.id, node2.id);
+    // obfs changes the dial shape, so the same server and PSK with and without it are distinct nodes.
+    assert_ne!(node1.id, node2.id);
+    let mut node3 = node2.clone();
+    if let OutboundConfig::Snell(cfg) = &mut node3.outbound {
+        cfg.obfs_host = Some("example.org".to_string());
+    }
+    assert_ne!(node2.id, node3.derive_id());
     assert_eq!(
         node1.outbound.credential_fingerprint(),
         node2.outbound.credential_fingerprint()

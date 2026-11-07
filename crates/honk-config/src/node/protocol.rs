@@ -464,6 +464,7 @@ impl OutboundConfig {
                 .unwrap_or(""),
             match self {
                 Self::Hysteria2(config) => config.obfs.as_deref().unwrap_or(""),
+                Self::Snell(config) => config.obfs.as_deref().unwrap_or(""),
                 _ => "",
             },
             tls.and_then(|tls| tls.reality_public_key.as_deref())
@@ -486,6 +487,13 @@ impl OutboundConfig {
             fingerprint.push_str("|ws-headers:");
             fingerprint
                 .push_str(&serde_json::to_string(headers).expect("WebSocket headers serialize"));
+        }
+        if let Self::Snell(config) = self
+            && config.obfs.is_some()
+            && let Some(host) = &config.obfs_host
+        {
+            fingerprint.push_str("|snell-obfs-host:");
+            fingerprint.push_str(&identity_field(host));
         }
         if let Self::Vless(config) = self {
             fingerprint.push('|');
