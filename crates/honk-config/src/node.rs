@@ -287,6 +287,14 @@ impl Node {
         }
     }
 
+    pub fn snell(&self) -> Option<&SnellConfig> {
+        self.outbound.snell()
+    }
+
+    pub fn snell_mut(&mut self) -> Option<&mut SnellConfig> {
+        self.outbound.snell_mut()
+    }
+
     pub fn tls(&self) -> Option<&TlsOptions> {
         self.outbound.tls()
     }

@@ -243,6 +243,23 @@ pub struct AnyTlsConfig {
     pub tls: TlsOptions,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SnellConfig {
+    pub psk: Option<String>,
+    pub version: Option<u8>,
+    pub mode: Option<String>,
+    pub network: Option<String>,
+    pub reuse: Option<bool>,
+    pub obfs: Option<String>,
+    pub obfs_host: Option<String>,
+}
+
+/// Rejects empty hostnames, values exceeding the RFC 1034 253-byte FQDN ceiling,
+/// or any control/whitespace byte that could split headers or smuggle request data.
+pub fn is_valid_obfs_host(host: &str) -> bool {
+    !host.is_empty() && host.len() <= 253 && !host.bytes().any(|b| b <= b' ' || b == 0x7f)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutboundConfig {
     Shadowsocks(ShadowsocksConfig),
@@ -254,6 +271,7 @@ pub enum OutboundConfig {
     Tuic(TuicConfig),
     Juicity(JuicityConfig),
     AnyTls(AnyTlsConfig),
+    Snell(SnellConfig),
     Direct,
     Block,
 }
@@ -276,6 +294,7 @@ impl OutboundConfig {
             NodeProtocol::Tuic => Self::Tuic(TuicConfig::default()),
             NodeProtocol::Juicity => Self::Juicity(JuicityConfig::default()),
             NodeProtocol::AnyTLS => Self::AnyTls(AnyTlsConfig::default()),
+            NodeProtocol::Snell => Self::Snell(SnellConfig::default()),
             NodeProtocol::Direct => Self::Direct,
             NodeProtocol::Block => Self::Block,
         }
@@ -292,6 +311,7 @@ impl OutboundConfig {
             Self::Tuic(_) => NodeProtocol::Tuic,
             Self::Juicity(_) => NodeProtocol::Juicity,
             Self::AnyTls(_) => NodeProtocol::AnyTLS,
+            Self::Snell(_) => NodeProtocol::Snell,
             Self::Direct => NodeProtocol::Direct,
             Self::Block => NodeProtocol::Block,
         }
@@ -306,7 +326,11 @@ impl OutboundConfig {
             Self::Tuic(config) => Some(&config.quic.tls),
             Self::Juicity(config) => Some(&config.quic.tls),
             Self::AnyTls(config) => Some(&config.tls),
-            Self::Shadowsocks(_) | Self::Socks5(_) | Self::Direct | Self::Block => None,
+            Self::Shadowsocks(_)
+            | Self::Socks5(_)
+            | Self::Snell(_)
+            | Self::Direct
+            | Self::Block => None,
         }
     }
 
@@ -319,7 +343,11 @@ impl OutboundConfig {
             Self::Tuic(config) => Some(&mut config.quic.tls),
             Self::Juicity(config) => Some(&mut config.quic.tls),
             Self::AnyTls(config) => Some(&mut config.tls),
-            Self::Shadowsocks(_) | Self::Socks5(_) | Self::Direct | Self::Block => None,
+            Self::Shadowsocks(_)
+            | Self::Socks5(_)
+            | Self::Snell(_)
+            | Self::Direct
+            | Self::Block => None,
         }
     }
 
@@ -347,6 +375,7 @@ impl OutboundConfig {
             Self::Vmess(config) => config.network.as_deref(),
             Self::Vless(config) => config.network.as_deref(),
             Self::AnyTls(config) => config.network.as_deref(),
+            Self::Snell(config) => config.network.as_deref(),
             _ => None,
         }
     }
@@ -361,6 +390,20 @@ impl OutboundConfig {
     pub fn vless_mut(&mut self) -> Option<&mut VlessConfig> {
         match self {
             Self::Vless(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn snell(&self) -> Option<&SnellConfig> {
+        match self {
+            Self::Snell(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn snell_mut(&mut self) -> Option<&mut SnellConfig> {
+        match self {
+            Self::Snell(config) => Some(config),
             _ => None,
         }
     }
@@ -392,6 +435,14 @@ impl OutboundConfig {
                 config.password.as_deref().unwrap_or(""),
             ]),
             Self::AnyTls(config) => identity_join(&[config.password.as_deref().unwrap_or("")]),
+            Self::Snell(config) => {
+                let version_str = config.version.map_or(String::new(), |v| v.to_string());
+                identity_join(&[
+                    config.psk.as_deref().unwrap_or(""),
+                    &version_str,
+                    config.mode.as_deref().unwrap_or(""),
+                ])
+            }
             Self::Direct | Self::Block => String::new(),
         }
     }

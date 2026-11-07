@@ -98,6 +98,8 @@ hmac = "0.13"
 hkdf = "0.13"
 md-5 = "0.11"
 blake3 = "1"
+blake2 = "0.10"
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 subtle = "2.6.1"
 
 # Networking

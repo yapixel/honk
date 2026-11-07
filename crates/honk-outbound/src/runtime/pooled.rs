@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use super::{AnyTlsRuntime, CapturedDialAdmission, NodeRuntime, ProtocolRuntime, WarmRetention};
+use super::{
+    AnyTlsRuntime, CapturedDialAdmission, NodeRuntime, ProtocolRuntime, SnellRuntime, WarmRetention,
+};
 use crate::proxy::transport::xhttp::XhttpRuntime;
 
 trait PooledLifecycle {
@@ -87,12 +89,33 @@ impl PooledLifecycle for XhttpRuntime {
     }
 }
 
+impl PooledLifecycle for SnellRuntime {
+    fn sync_warm_retention(&self, _retention: u8, _was_unretained: bool) {}
+    fn retire(&self) {
+        self.pool.retire();
+    }
+    fn shutdown(&self) {
+        self.pool.retire();
+    }
+    fn reap_unretained_idle(&self) -> usize {
+        self.pool.reap_expired()
+    }
+    fn live_session_count(&self) -> usize {
+        self.pool.idle_len()
+    }
+    fn is_warm_or_stateless_for(&self, _: crate::proxy::WarmRequirement) -> bool {
+        true
+    }
+    fn bind_dial_admission(&self, _: &CapturedDialAdmission) {}
+}
+
 impl NodeRuntime {
     fn protocol_pool(&self) -> Option<&dyn PooledLifecycle> {
         match &self.runtime {
             ProtocolRuntime::AnyTls(runtime) => Some(runtime),
             #[cfg(any(feature = "rprx", test))]
             ProtocolRuntime::Vless(runtime) => Some(runtime),
+            ProtocolRuntime::Snell(runtime) => Some(runtime),
             ProtocolRuntime::None | ProtocolRuntime::Quic(_) => None,
         }
     }
