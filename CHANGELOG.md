@@ -20,9 +20,14 @@ Entries live in [changes/](changes/) until release.
 - Preserve final-upstream and response-source metadata when a concurrent DNS query reuses an in-flight result without a cache hit, including stale-cache fallback. (#462)
 - Include a readable `message` in DNS audit JSON so CEE syslog receivers can display each event; VictoriaLogs maps it to `_msg` instead of using its missing-message placeholder. (#462)
 - Keep the DNS audit event when a delivered response's answers cannot be rendered, with `answers: null` and the reason in `answers_omitted`. (#462)
+- Snell v3–v6 outbound with UDP over TCP, configurable with `snell_psk`/`snell_version`/`snell_mode` and importable from Clash subscriptions.
+- Snell connection reuse (`snell_reuse`, Clash `reuse: true`) for v4 and later.
+- Snell simple-obfs (`snell_obfs` http/tls, Clash `obfs-opts`) for v3–v5. Surge's official `snell-server` only accepts `http`.
+- VPN server bypass for a VPN app on the same host: once its tunnel is ready, new flows to `vpn_server_ip`/`vpn_server_port` go direct (`vpn_server_l4proto`, `vpn_interface_address`).
 
 ### Changed
 
+- Rooted arm64 Android builds use Bionic-compatible runtime paths and an NDK-backed `just build-android` recipe; devices running Linux 6.12 or newer can run the real eBPF binary without systemd.
 - The shipped `honk-core` binary now allocates through jemalloc instead of mimalloc; `-stock` archives still use the system allocator. (#455)
 - The `honk-core` Cargo feature formerly named `mimalloc` is now `jemalloc`; builds with `--no-default-features` keep the system allocator. (#455)
 - Release downloads label the default allocator `jemalloc-*` instead of `mimalloc-*`. (#455)
