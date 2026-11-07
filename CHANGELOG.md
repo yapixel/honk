@@ -6,6 +6,34 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 Entries live in [changes/](changes/) until release.
 
+## [0.1.0-beta.6] - 2026-11-07
+
+### Added
+
+- Snell v3–v6 outbound with UDP over TCP, configurable with `snell_psk`/`snell_version`/`snell_mode` and importable from Clash subscriptions.
+- Snell connection reuse (`snell_reuse`, Clash `reuse: true`) for v4 and later.
+- Snell simple-obfs (`snell_obfs` http/tls, Clash `obfs-opts`) for v3–v5. Surge's official `snell-server` only accepts `http`.
+- VPN server bypass for a VPN app on the same host: once its tunnel is ready, new flows to `vpn_server_ip`/`vpn_server_port` go direct (`vpn_server_l4proto`, `vpn_interface_address`).
+
+### Changed
+
+- Rooted arm64 Android builds use Bionic-compatible runtime paths and an NDK-backed `just build-android` recipe; devices running Linux 6.12 or newer can run the real eBPF binary without systemd.
+- The shipped `honk-core` binary now allocates through jemalloc instead of mimalloc; `-stock` archives still use the system allocator.
+- The `honk-core` Cargo feature formerly named `mimalloc` is now `jemalloc`; builds with `--no-default-features` keep the system allocator.
+- Release downloads label the default allocator `jemalloc-*` instead of `mimalloc-*`.
+- Removed the mimalloc-only `HONK_MI_COLLECT_SECS` and `MIMALLOC_PURGE_DELAY` environment variables and the worker idle-collection machinery they controlled.
+- Runtime jemalloc options use `_RJEM_MALLOC_CONF`, not `MALLOC_CONF`: the crate prefixes jemalloc symbols and the environment variable with `_rjem_`.
+
+### Fixed
+
+- Bound each DNS cache shard's answer bytes to `max(entry capacity × 1 KiB, 65,535 bytes)`, evicting LRU entries when large answers fill the budget.
+- Inline DNS cache insert/remove accounting in size-optimized builds.
+
+### Internal
+
+- Move the aya family to userspace `aya` 0.16, `aya-obj` 0.6, `aya-log` 0.4 and kernel-side `aya-ebpf` 0.3, adapting call sites to the new map, loader and TC context APIs while preserving programs, map names and shared binary layouts.
+- Make shared payload padding explicit and restrict locked-value `Pod` implementations to the three audited payloads; reject stale BTF schemas without changing existing field offsets or map-value sizes.
+
 ## [0.1.0-beta.5] - 2026-11-03
 
 ### Added
@@ -118,7 +146,8 @@ Summarised from the [release notes](https://github.com/daeuniverse/honk/releases
 - Shared UDP sources survive malformed SOCKS5, Trojan and Juicity datagrams.
 - QUIC session tickets honour `skip_cert_verify`, and a reload restores warm carriers and probes.
 
-[Unreleased]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.5...HEAD
+[Unreleased]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.6...HEAD
+[0.1.0-beta.6]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.5...v0.1.0-beta.6
 [0.1.0-beta.5]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.4...v0.1.0-beta.5
 [0.1.0-beta.4]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.3...v0.1.0-beta.4
 [0.1.0-beta.3]: https://github.com/daeuniverse/honk/compare/v0.1.0-beta.2...v0.1.0-beta.3
