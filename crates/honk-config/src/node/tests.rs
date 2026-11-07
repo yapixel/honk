@@ -540,3 +540,138 @@ fn test_validate_redacts_vless_path_context_name() {
     let rendered = format!("{error} {error:?}");
     assert!(!rendered.contains(CANARY), "{rendered}");
 }
+
+#[test]
+fn test_is_valid_obfs_host() {
+    assert!(is_valid_obfs_host("example.com"));
+    assert!(is_valid_obfs_host("1.2.3.4"));
+    assert!(is_valid_obfs_host("[::1]"));
+    assert!(is_valid_obfs_host(&"a".repeat(253)));
+    assert!(is_valid_obfs_host("例え.jp"));
+
+    assert!(!is_valid_obfs_host(""));
+    assert!(!is_valid_obfs_host(&"a".repeat(254)));
+    for bad in ["a b", "a\tb", "a\rb", "a\nb", "a\0b", "a\x7fb", "a\u{1f}b"] {
+        assert!(!is_valid_obfs_host(bad), "{bad:?} must be rejected");
+    }
+}
+
+#[test]
+fn test_snell_obfs_validation() {
+    let base_config = SnellConfig {
+        psk: Some("secret".to_string()),
+        version: Some(4),
+        mode: None,
+        network: None,
+        reuse: None,
+        obfs: None,
+        obfs_host: None,
+    };
+
+    let base_node = |config: SnellConfig| Node {
+        name: "snell-node".to_string(),
+        address: "1.2.3.4:8388".to_string(),
+        host: "1.2.3.4".to_string(),
+        port: 8388,
+        outbound: OutboundConfig::Snell(config),
+        ..Default::default()
+    };
+
+    for mode in ["http", "tls"] {
+        let mut cfg = base_config.clone();
+        cfg.obfs = Some(mode.to_string());
+        assert!(base_node(cfg.clone()).validate_detailed().is_ok());
+
+        cfg.obfs_host = Some("bing.com".to_string());
+        assert!(base_node(cfg.clone()).validate_detailed().is_ok());
+
+        cfg.version = Some(3);
+        assert!(base_node(cfg.clone()).validate_detailed().is_ok());
+
+        cfg.version = Some(5);
+        assert!(base_node(cfg).validate_detailed().is_ok());
+    }
+
+    {
+        let mut cfg = base_config.clone();
+        cfg.obfs = Some("socks".to_string());
+        let err = base_node(cfg).validate_detailed().unwrap_err();
+        assert_eq!(err.diagnostic.setting.to_string(), "nodes.snell_obfs");
+    }
+
+    // Obfs with effective version 6 rejected
+    {
+        let mut cfg = base_config.clone();
+        cfg.version = Some(6);
+        cfg.obfs = Some("http".to_string());
+        let err = base_node(cfg).validate_detailed().unwrap_err();
+        assert_eq!(err.diagnostic.setting.to_string(), "nodes.snell_obfs");
+        assert_eq!(
+            err.diagnostic.message,
+            "snell: obfs is not supported by snell v6"
+        );
+    }
+
+    {
+        let mut cfg = base_config.clone();
+        cfg.obfs = None;
+        cfg.obfs_host = Some("bing.com".to_string());
+        let err = base_node(cfg).validate_detailed().unwrap_err();
+        assert_eq!(err.diagnostic.setting.to_string(), "nodes.snell_obfs_host");
+        assert_eq!(err.diagnostic.message, "snell: obfs_host requires obfs");
+    }
+
+    for bad_host in ["", "bing .com", "a\nb", &"a".repeat(254)] {
+        let mut cfg = base_config.clone();
+        cfg.obfs = Some("http".to_string());
+        cfg.obfs_host = Some(bad_host.to_string());
+        let err = base_node(cfg).validate_detailed().unwrap_err();
+        assert_eq!(err.diagnostic.setting.to_string(), "nodes.snell_obfs_host");
+        assert_eq!(err.diagnostic.message, "snell: invalid obfs host");
+    }
+}
+
+#[test]
+fn test_snell_obfs_identity_and_wire_roundtrip() {
+    let mut node1 = Node {
+        name: "snell-1".to_string(),
+        address: "1.2.3.4:8388".to_string(),
+        host: "1.2.3.4".to_string(),
+        port: 8388,
+        outbound: OutboundConfig::Snell(SnellConfig {
+            psk: Some("secret".to_string()),
+            version: Some(4),
+            mode: None,
+            network: None,
+            reuse: None,
+            obfs: None,
+            obfs_host: None,
+        }),
+        ..Default::default()
+    };
+    node1.id = node1.derive_id();
+
+    let mut node2 = node1.clone();
+    if let OutboundConfig::Snell(cfg) = &mut node2.outbound {
+        cfg.obfs = Some("tls".to_string());
+        cfg.obfs_host = Some("example.com".to_string());
+    }
+    node2.id = node2.derive_id();
+
+    assert_eq!(node1.id, node2.id);
+    assert_eq!(
+        node1.outbound.credential_fingerprint(),
+        node2.outbound.credential_fingerprint()
+    );
+
+    let serialized = serde_json::to_string(&node2).unwrap();
+    assert!(serialized.contains("\"snell_obfs\":\"tls\""));
+    assert!(serialized.contains("\"snell_obfs_host\":\"example.com\""));
+
+    let deserialized: Node = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.snell().unwrap().obfs.as_deref(), Some("tls"));
+    assert_eq!(
+        deserialized.snell().unwrap().obfs_host.as_deref(),
+        Some("example.com")
+    );
+}

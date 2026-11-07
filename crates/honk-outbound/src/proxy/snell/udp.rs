@@ -243,3 +243,7 @@ impl MultiTargetTransport for SnellUdpTransport {
         self.poison.is_set()
     }
 }
+
+#[cfg(test)]
+#[path = "udp_tests.rs"]
+mod udp_tests;
