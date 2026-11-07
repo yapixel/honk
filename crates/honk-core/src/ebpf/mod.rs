@@ -429,7 +429,7 @@ pub(crate) fn record_pname_routing(
         }),
         PnameSupport::Unavailable => Some(Issue {
             code: "pname_routing_disabled",
-            message: "cgroup v2 is unavailable; pname() conditions see no process name, so positive ones never match and negated ones always match.",
+            message: "cgroup socket identity capture is unavailable; pname() conditions see no process name, so positive ones never match and negated ones always match.",
             reason: "cgroup_unavailable",
         }),
     };

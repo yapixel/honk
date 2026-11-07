@@ -219,68 +219,96 @@ impl RealEbpfBackend {
                 warn!("kernel argv capture unavailable; using thread comm")
             }
         }
-        // Required socket-lifetime identity capture. Keep every link owned by
-        // the backend; missing support or a partial attachment is fatal.
+        // Socket-lifetime identity capture is required on ordinary Linux: it
+        // supplies the process name and control-plane PID used by routing.
+        // Android's netd may already own the same root-cgroup hooks with an
+        // incompatible attach mode. In that case the identity capability is
+        // explicitly degraded below, while the independent TCP sock_ops
+        // child-proof remains required.
         let mut cgroup_sock_links = Vec::new();
         let mut cgroup_sock_addr_links = Vec::new();
         let cgroup_path = detect_cgroup_path()
             .map_err(|error| anyhow::anyhow!("required socket identity capture: {error}"))?;
         let cgroup_file = std::fs::File::open(&cgroup_path)
             .map_err(|e| anyhow::anyhow!("open cgroup {}: {}", cgroup_path, e))?;
-        let (create_name, cg_addr_names) = match pname_mode {
-            process_name::PnameCaptureMode::Argv0 => (
-                "tproxy_wan_cg_sock_create",
-                [
-                    "tproxy_wan_cg_connect4",
-                    "tproxy_wan_cg_connect6",
-                    "tproxy_wan_cg_sendmsg4",
-                    "tproxy_wan_cg_sendmsg6",
-                ],
-            ),
-            process_name::PnameCaptureMode::Comm => (
-                "tproxy_wan_cg_sock_create_comm",
-                [
-                    "tproxy_wan_cg_connect4_comm",
-                    "tproxy_wan_cg_connect6_comm",
-                    "tproxy_wan_cg_sendmsg4_comm",
-                    "tproxy_wan_cg_sendmsg6_comm",
-                ],
-            ),
-        };
-        let p: &mut aya::programs::CgroupSock = bpf
-            .program_mut(create_name)
-            .and_then(|p| p.try_into().ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("required socket identity program {} not found", create_name)
-            })?;
-        p.load().map_err(|error| {
-            anyhow::anyhow!("required socket identity program {create_name} load: {error}")
-        })?;
-        let link_id = p
-            .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
-            .map_err(|error| {
-                anyhow::anyhow!("required socket identity program {create_name} attach: {error}")
-            })?;
-        cgroup_sock_links.push(p.take_link(link_id)?);
-        for name in &cg_addr_names {
-            let p: &mut aya::programs::CgroupSockAddr = bpf
-                .program_mut(name)
+        let identity_attach = (|| -> anyhow::Result<_> {
+            let (create_name, cg_addr_names) = match pname_mode {
+                process_name::PnameCaptureMode::Argv0 => (
+                    "tproxy_wan_cg_sock_create",
+                    [
+                        "tproxy_wan_cg_connect4",
+                        "tproxy_wan_cg_connect6",
+                        "tproxy_wan_cg_sendmsg4",
+                        "tproxy_wan_cg_sendmsg6",
+                    ],
+                ),
+                process_name::PnameCaptureMode::Comm => (
+                    "tproxy_wan_cg_sock_create_comm",
+                    [
+                        "tproxy_wan_cg_connect4_comm",
+                        "tproxy_wan_cg_connect6_comm",
+                        "tproxy_wan_cg_sendmsg4_comm",
+                        "tproxy_wan_cg_sendmsg6_comm",
+                    ],
+                ),
+            };
+            let p: &mut aya::programs::CgroupSock = bpf
+                .program_mut(create_name)
                 .and_then(|p| p.try_into().ok())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("required socket identity program {} not found", name)
+                    anyhow::anyhow!("required socket identity program {} not found", create_name)
                 })?;
             p.load().map_err(|error| {
-                anyhow::anyhow!("required socket identity program {name} load: {error}")
+                anyhow::anyhow!("required socket identity program {create_name} load: {error}")
             })?;
             let link_id = p
                 .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
                 .map_err(|error| {
-                    anyhow::anyhow!("required socket identity program {name} attach: {error}")
+                    anyhow::anyhow!("required socket identity program {create_name} attach: {error}")
                 })?;
-            cgroup_sock_addr_links.push(p.take_link(link_id)?);
+            cgroup_sock_links.push(p.take_link(link_id)?);
+            for name in &cg_addr_names {
+                let p: &mut aya::programs::CgroupSockAddr = bpf
+                    .program_mut(name)
+                    .and_then(|p| p.try_into().ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("required socket identity program {} not found", name)
+                    })?;
+                p.load().map_err(|error| {
+                    anyhow::anyhow!("required socket identity program {name} load: {error}")
+                })?;
+                let link_id = p
+                    .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
+                    .map_err(|error| {
+                        anyhow::anyhow!("required socket identity program {name} attach: {error}")
+                    })?;
+                cgroup_sock_addr_links.push(p.take_link(link_id)?);
+            }
+            Ok(())
+        })();
+        if let Err(error) = identity_attach {
+            if cfg!(target_os = "android") {
+                cgroup_sock_links.clear();
+                cgroup_sock_addr_links.clear();
+                warn!(
+                    "Android root-cgroup socket identity hooks unavailable; pname() routing is degraded: {error}"
+                );
+            } else {
+                return Err(error);
+            }
         }
         let tcp_proof_link = tcp_binding::attach(&mut bpf, &cgroup_file)?;
-        info!("Attached 6 required cgroup programs to {}", cgroup_path);
+        if cgroup_sock_links.is_empty() {
+            warn!(
+                "Attached required TCP cgroup child-proof to {}; process identity capture is unavailable",
+                cgroup_path
+            );
+        } else {
+            info!(
+                "Attached cgroup socket identity hooks and required TCP child-proof to {}",
+                cgroup_path
+            );
+        }
         // Initialize outbound connectivity map: all entries are alive by default.
         // This map is updated by health checks; until then we must not drop
         // proxy-bound traffic. Skipping entries here marks every outbound
