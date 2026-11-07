@@ -27,8 +27,9 @@ fn android_startup_binding_failure(
     android && requested != 0 && owned == 0 && failed == requested
 }
 
-/// Fails only when the topology cannot be read (after the bounded dump retry),
-/// the default route cannot be read for an `auto` entry, or `load` fails.
+/// Fails when the topology cannot be read (after the bounded dump retry), the
+/// default route cannot be read for an `auto` entry, `load` fails, or, on
+/// Android only, every planned binding fails to attach.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_interfaces(
     obj: &[u8],
@@ -69,13 +70,7 @@ pub(crate) async fn start_interfaces(
             Err(error) => state.step_failed(ReconcileStep::Topology, &error),
         }
     }
-    // Android builds must not report a running datapath when every requested
-    // TC attachment was rejected.  A vendor kernel without TCX otherwise
-    // leaves the control plane alive while all traffic bypasses interception.
-    // Keep the documented pending/empty-interface behavior: this guard only
-    // fires when the resolved plan had bindings and every one failed before
-    // the first owner was published.  Partial failures remain observable via
-    // the existing degradation and watcher retry path.
+    // A vendor kernel without TCX would otherwise run with nothing intercepted.
     if android_startup_binding_failure(
         cfg!(target_os = "android"),
         plan.bindings.len(),

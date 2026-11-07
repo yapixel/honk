@@ -60,9 +60,9 @@ build-musl-native:
 
 # Build an arm64 Android binary for a rooted device. The Android NDK supplies
 # Bionic's linker and headers; the eBPF object remains the host-built,
-# target-independent object embedded by honk-core's build script. Android
-# deliberately uses the stock allocator because jemalloc's native build is
-# not part of the supported NDK toolchain.
+# target-independent object embedded by honk-core's build script. This recipe
+# uses the stock allocator; the Android CI workflow builds the jemalloc variants
+# with a 64 KiB page pin and an NDK libunwind shim.
 build-android:
     #!/usr/bin/env bash
     set -euo pipefail
