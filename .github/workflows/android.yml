@@ -18,12 +18,23 @@ env:
   # ubuntu-24.04 runners preinstall this NDK; avoid a multi-hundred-MiB
   # sdkmanager download on every branch push.
   ANDROID_NDK_VERSION: "27.3.13750724"
+  # Cross builds can't probe the page size; 64 KiB pages also run on 4 and 16 KiB kernels.
+  JEMALLOC_SYS_WITH_LG_PAGE: "16"
 
 jobs:
   build:
-    name: build aarch64-linux-android
+    name: build aarch64-linux-android${{ matrix.suffix }}-${{ matrix.variant }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        # full embeds doona (native-ui) next to the Clash API; api has both APIs without the UI.
+        # -stock keeps the system allocator, the rest use jemalloc.
+        variant: [full, api]
+        suffix: ["", "-stock"]
+    env:
+      ARTIFACT_NAME: honk-core-android-aarch64${{ matrix.suffix }}-${{ matrix.variant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -70,7 +81,7 @@ jobs:
           # The CMake toolchain wrapper below is part of the ABI contract.  Keep
           # old native build trees from reusing a BoringSSL configured before it
           # was introduced.
-          key: android-aarch64-ndk-${{ env.ANDROID_NDK_VERSION }}-cmake2
+          key: android-aarch64-ndk-${{ env.ANDROID_NDK_VERSION }}-cmake2-${{ matrix.variant }}${{ matrix.suffix }}
           cache-on-failure: true
           workspaces: |
             . -> target
@@ -116,24 +127,43 @@ jobs:
           echo "CXX_aarch64_linux_android=$toolchain/bin/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$toolchain/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$clang" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-lc++abi" >> "$GITHUB_ENV"
+          # tikv-jemalloc-sys links -lgcc on Android; NDK r23+ ships libunwind instead.
+          mkdir -p "$RUNNER_TEMP/libgcc-shim"
+          echo 'INPUT(-lunwind)' > "$RUNNER_TEMP/libgcc-shim/libgcc.a"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-C link-arg=-lc++abi -L $RUNNER_TEMP/libgcc-shim" >> "$GITHUB_ENV"
           echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-android${ANDROID_API} --sysroot=$sysroot" >> "$GITHUB_ENV"
           echo "BORING_BSSL_RUST_CPPLIB_aarch64_linux_android=c++_static" >> "$GITHUB_ENV"
           echo "CMAKE_TOOLCHAIN_FILE=$wrapper" >> "$GITHUB_ENV"
           echo "ANDROID_ABI=arm64-v8a" >> "$GITHUB_ENV"
           echo "ANDROID_PLATFORM=android-${ANDROID_API}" >> "$GITHUB_ENV"
 
+      - name: Fetch doona for the embedded UI
+        if: matrix.variant == 'full'
+        run: |
+          set -euo pipefail
+          dir=$(ci/fetch-doona.sh)
+          echo "HONK_DOONA_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Build honk-core for rooted Android
         run: |
           set -euo pipefail
+          case "${{ matrix.variant }}" in
+            full) features=clash-api,native-ui ;;
+            api) features=clash-api,native-api ;;
+            *) printf 'unknown variant: %s\n' "${{ matrix.variant }}" >&2; exit 1 ;;
+          esac
+          features="ebpf,rprx,$features"
+          if [[ "${{ matrix.suffix }}" != "-stock" ]]; then
+            features+=,jemalloc
+          fi
           cargo build --release -p honk-core --no-default-features \
-            --features "clash-api,native-api,ebpf,rprx" \
+            --features "$features" \
             --target aarch64-linux-android
 
       - name: Package Android binary
         run: |
           set -euo pipefail
-          name=honk-core-android-aarch64
+          name=$ARTIFACT_NAME
           if readelf -d target/aarch64-linux-android/release/honk-core | grep -Fq 'libc++_shared.so'; then
             echo 'Android binary unexpectedly depends on libc++_shared.so; use the static NDK STL' >&2
             exit 1
@@ -148,7 +178,7 @@ jobs:
       - name: Upload Android binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: honk-core-android-aarch64
-          path: honk-core-android-aarch64.tar.gz
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}.tar.gz
           if-no-files-found: error
           retention-days: 14
