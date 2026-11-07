@@ -1237,7 +1237,7 @@ If the backend rejects the reset before commit, activation is rejected. After ro
 
 `must`/`block` remain final. With native disabled, existing Clash default/cached mode behavior is unchanged.
 
-`GET /datapath` and runtime's datapath summary use backend-owned program/hook/routing/admission observations, not configured-interface guesses. Mock reports disabled/none. Real observations are partial, with unknown/null for unverified facts and separate datapath routing-generation identity.
+`GET /datapath` and runtime's datapath summary use backend-owned program/hook/routing/admission observations, not configured-interface guesses. Mock reports disabled/none. Real observations are partial, with unknown/null for unverified facts and separate datapath routing-generation identity. When configured, `vpn_server_bypass` reports `{"enabled": bool, "ready": bool, "interface": string|null}` where `interface` is the candidate name that satisfied readiness (or null when not ready); it is omitted when unconfigured.
 
 Map capacity may be known while occupancy remains null. Attached hooks alone do not establish active admission, and `full_transparency` is never advertised.
 

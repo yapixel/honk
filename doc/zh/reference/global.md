@@ -18,6 +18,10 @@
 | `shutdown_wait_connections` | `shutdown_wait_connections` | `false` | 可重载、显式启用的业务连接宽限等待；见[关闭](#关闭)。 |
 | `lan_interface` | `lan_interface` | `[]` | 拦截转发流量的 LAN 网卡，逗号分隔。空值不安装任何 LAN hook。参见[网卡语义](#网卡语义)。 |
 | `wan_interface` | `wan_interface` | `[]` | 安装 hook 以拦截本机发起 TCP/UDP 的 WAN 网卡，逗号分隔。字面值 `auto` 跟随 metric 最低的 IPv4 默认路由。WAN 绑定规则见[网卡语义](#网卡语义)。 |
+| `vpn_server_ip` | `vpn_server_ip` | `[]` | 本机发起的 VPN 服务端绕过目标 IP 或 CIDR。为空时禁用该门控。参见 [VPN 服务端直连绕过](#vpn-服务端直连绕过)。 |
+| `vpn_server_port` | `vpn_server_port` | `[]` | VPN 服务端直连绕过的目标端口或端口范围。配置 `vpn_server_ip` 时为必填；未配置时必须为空。参见 [VPN 服务端直连绕过](#vpn-服务端直连绕过)。 |
+| `vpn_server_l4proto` | `vpn_server_l4proto` | `[]`（`tcp` 与 `udp`） | VPN 服务端直连绕过的传输层协议（`tcp`、`udp`）。默认为两者均启用。参见 [VPN 服务端直连绕过](#vpn-服务端直连绕过)。 |
+| `vpn_interface_address` | `vpn_interface_address` | `[]` | 用于收敛自动 VPN 接口就绪判定的可选 CIDR 列表。参见 [VPN 服务端直连绕过](#vpn-服务端直连绕过)。 |
 | `auto_config_kernel_parameter` | `auto_config_kernel_parameter` | `false` | 自动配置 sysctl 的兼容开关。当前运行时不会按该字段分支；真实数据路径会执行固定的 best-effort sysctl 设置。该设置会把 `net.ipv6.conf.all.forwarding` 固定为 1，并因此对每个 WAN 根接口（包括同时也是 LAN 的接口）一出现在网卡拓扑中（启动时，或之后出现时）就写入 `net.ipv6.conf.<wan>.accept_ra=2`，不等待其 hook，也不要求链路 UP，保证 SLAAC/RA 学来的 IPv6 默认路由不会因 forwarding 被固定而过期消失。同样地，对第一个已解析、存在且未被拒绝的 LAN 名称写入 `net.ipv4.conf.<lan>.rp_filter=0`，按配置原样、不做规范化。新加入设备的 udev `systemd-sysctl` 会在首次写入后立即恢复发行版默认值，因此每个值约一秒后会再写一次；此后 honk 不再改动，直到该设备被重建。使用 systemd-networkd 的主机建议在 WAN 的 `.network` 文件中显式配置 `IPv6AcceptRA=yes`。 |
 | `nfqueue_enable` | `nfqueue_enable` | `true` | 将有歧义的 LAN 转发 UDP 原始包保留在 NFQUEUE，直到用户态得到终态决策。需要真实 eBPF 后端；单实例交接后若固定队列不可用，或数据路径准入前的队列/规则/健康检查失败，honk 记录 warning，仅在本进程关闭该功能且不改写配置。持久化 token generation 恢复失败仍为 fatal，因为分配器状态无法确定。安装阶段会回收保留的 nftables table。除实际发生启动降级的情况外，修改后需重启（见下文）。新配置应使用此字段；已弃用的 `experimental.udp_nfqueue.enabled` 写法仍接受并给出迁移 warning；两者同时存在时以此 canonical 字段为准。 |
 | `data_dir` | `data_dir` | Linux 为 `"/var/lib/honk"`，Android 为 `"/data/adb/honk"` | 生成状态和相对运行时资源的非空绝对根目录。缺失目录会递归创建；每个候选目录都必须通过私有的 create-new/remove 探测。候选目录不可用时，仅回退到通过同一探测的工作目录，但 `--store db` 和已启用的原生 API 密码登录不允许这种回退。旧根目录 `/var/share/honk`（`LEGACY_DATA_DIR`）中的已有资源按下方各路径规则继续使用；旧缓存和订阅导入则会将符合条件的状态复制到 `state/honk.db`。修改后需重启。 |
@@ -135,6 +139,28 @@ UDP DNS 目标在启动时按健康检查超时尝试初始化。本地拒绝或
 `IfaceWatcher` 订阅链路、地址和 IPv4/IPv6 路由事件，并每 60 秒执行一次协调。若无法订阅或无法注册轮询，它仍每 60 秒协调一次，但没有事件通知，并报告 `iface_watch` 降级。它会随网卡和默认路由变化创建、更新或释放所需的 LAN/WAN hook。拓扑变化仍用于 ECS 刷新，并立即唤醒受健康状态控制的出站探测，但不再生成网关地址 `direct(must)` 规则，也没有隐藏的内核地址白名单。网卡列表配置本身发生变化仍需重启；网关管理访问应使用[显式用户路由](./routing.md#显式本地路由)。启动顺序与导致启动失败的条件见[接口协调](../design/datapath.md#接口协调)。
 
 真实 LAN 绑定还会执行提示性的[自保覆盖检查](./routing.md#显式本地路由)。无法确认时仅告警，不拒绝启动或重载，也不插入路由规则。
+
+## VPN 服务端直连绕过
+
+用于本机运行的 VPN 应用（IKEv2/IPsec、WireGuard、OpenVPN）。`wan_interface` 上本机发起、目标地址属于 `vpn_server_ip` **且** 协议与目标端口属于 `vpn_server_l4proto`/`vpn_server_port` 的流量，视为 VPN 服务端流量。
+
+```
+global {
+    wan_interface: wlan0
+    vpn_server_ip: 203.0.113.0/24
+    vpn_server_port: 500, 4500
+    vpn_interface_address: 10.8.0.0/16
+}
+```
+
+- VPN 就绪时，新的 VPN 服务端连接直接直连，不受路由规则和 Clash 模式影响。
+- 未就绪时照常按路由规则处理；若隧道建立前的握手需要走代理，请添加相应规则。
+- TCP 连接保持建立时选定的路径。UDP 跟随当前状态：就绪后隧道切换到直连路径，服务端会看到新的源地址和端口，IKEv2 NAT-T 与 WireGuard 能处理这种变化。
+- 不影响 LAN 转发流量。
+
+当存在非 honk 自身的、处于 UP 状态且拥有全局单播地址（设置 `vpn_interface_address` 时须落在其中）的 `tun*` 或 `ipsec*` 接口时，视为 VPN 就绪。`tun*` 接口在其收发包计数增长后就绪；`ipsec*` 接口在拥有非 local 表的默认路由期间就绪。Android 上防火墙、广告拦截等 VpnService 应用以及 Wi-Fi 通话也会创建此类接口，建议设置 `vpn_interface_address`。就绪状态可在 `GET /api/v1/datapath` 中查看。
+
+配置 `vpn_server_ip` 时必须设置 `vpn_server_port`，且不得包含 DNS 处理保留的 53 端口。默认路由会被拒绝，端口数乘以协议数不得超过 4096，并且必须设置 `wan_interface`。修改这些键需要重启。
 
 ## 拨号模式
 

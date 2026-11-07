@@ -89,7 +89,7 @@ IPv4 映射的 IPv6 来源按 IPv4 比较。
 
 逐连接速率仍为 null。空列表是 `visibility: partial`，不代表设备没有连接。Mock 数据面显示 disabled/none。
 
-真实后端只依据实际程序、挂钩、路由 root、监听器和 admission 观测报告状态，未知项为 unknown/null，覆盖仍为 partial。HTTP 就绪不等于数据面就绪。
+真实后端只依据实际程序、挂钩、路由 root、监听器和 admission 观测报告状态，未知项为 unknown/null，覆盖仍为 partial。配置了 VPN 服务端绕行时，`vpn_server_bypass` 报告 `{"enabled": bool, "ready": bool, "interface": string|null}`（就绪时为候选接口名，未就绪时为 null；未配置时省略）。HTTP 就绪不等于数据面就绪。
 
 TCP 在 copy 成功读取或 splice 成功写入目标 socket 时实时入账，成功写出的嗅探前缀仅计一次。UDP 保持原逐包语义。唯一的一秒采样器使用实际时间间隔。
 

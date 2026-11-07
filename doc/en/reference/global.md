@@ -18,6 +18,10 @@ The dae parser accepts compatibility-only keys and stores them in `GlobalConfig`
 | `shutdown_wait_connections` | `shutdown_wait_connections` | `false` | Reloadable opt-in business-connection grace; see [Shutdown](#shutdown). |
 | `lan_interface` | `lan_interface` | `[]` | Comma-separated LAN interfaces on which forwarded traffic is intercepted. Empty installs no LAN hooks. See [Interface semantics](#interface-semantics). |
 | `wan_interface` | `wan_interface` | `[]` | Comma-separated WAN interfaces whose hooks intercept host-originated TCP and UDP. The literal `auto` follows the lowest-metric IPv4 default route. See [Interface semantics](#interface-semantics). |
+| `vpn_server_ip` | `vpn_server_ip` | `[]` | Destination IPs or CIDRs of VPN servers for host-originated bypass. Empty disables the gate. See [VPN server bypass](#vpn-server-bypass). |
+| `vpn_server_port` | `vpn_server_port` | `[]` | Destination ports or ranges for VPN server bypass. Required when `vpn_server_ip` is configured; rejected otherwise. See [VPN server bypass](#vpn-server-bypass). |
+| `vpn_server_l4proto` | `vpn_server_l4proto` | `[]` (`tcp`, `udp`) | L4 protocols for VPN server bypass (`tcp`, `udp`). Defaults to both. See [VPN server bypass](#vpn-server-bypass). |
+| `vpn_interface_address` | `vpn_interface_address` | `[]` | Optional CIDRs narrowing automatic VPN interface readiness detection. See [VPN server bypass](#vpn-server-bypass). |
 | `auto_config_kernel_parameter` | `auto_config_kernel_parameter` | `false` | Compatibility switch for automatic sysctl setup. The current runtime does not branch on this field; the real datapath applies its fixed best-effort sysctl setup. That setup pins `net.ipv6.conf.all.forwarding=1` and therefore also writes `net.ipv6.conf.<wan>.accept_ra=2` for every WAN root interface (including one that is also a LAN interface) as soon as that interface is present in the interface topology, at startup or when it appears later, without waiting for its hooks or the link to be up, so an SLAAC/RA-learned IPv6 default route survives the forwarding pin. It also writes `net.ipv4.conf.<lan>.rp_filter=0` for the first resolved LAN name that exists and is not refused, as configured and not canonicalized. Each value is written again about one second later, because udev's `systemd-sysctl` run for a newly added device restores the distribution default right after the first write; after that honk leaves it alone until the device is recreated. Hosts running systemd-networkd should prefer the explicit `IPv6AcceptRA=yes` in the WAN `.network` file. |
 | `nfqueue_enable` | `nfqueue_enable` | `true` | Hold ambiguous LAN-forwarded UDP originals in NFQUEUE until userspace reaches a terminal decision. The setting requires the real eBPF backend; after the singleton instance handoff, an unavailable fixed queue or a pre-admission queue/rules/health failure logs a warning and disables it for the process without rewriting the config. Persistent token-generation recovery failures remain fatal. Installation reclaims the reserved nftables table. Changing it requires restart except after an actual startup downgrade (see below). New configurations should use this key; the deprecated `experimental.udp_nfqueue.enabled` spelling is accepted with a migration warning, but this canonical key wins when both are present. |
 | `data_dir` | `data_dir` | `"/var/lib/honk"` (Linux), `"/data/adb/honk"` (Android) | Absolute, non-empty root for generated state and relative runtime assets. Missing directories are created recursively; each candidate must pass a private create-new/remove probe. An unusable candidate falls back to the equally probed working directory, except with `--store db` or enabled native API password login. Existing artifacts under the legacy `/var/share/honk` (`LEGACY_DATA_DIR`) root remain usable through the path-specific fallback rules below; legacy cache and subscription imports instead copy eligible state into `state/honk.db`. A change requires restart. |
@@ -141,6 +145,28 @@ A refused entry binds nothing and is logged as an error naming the interface and
 `IfaceWatcher` subscribes to link, address, and IPv4/IPv6 route events and also performs a 60-second reconciliation. If it cannot subscribe or register for polling, it keeps reconciling every 60 seconds without event notifications and reports the `iface_watch` degradation. It creates, updates, or drops the required LAN/WAN hooks as interfaces and default routes change. A changed topology immediately wakes health-backed outbound probing. Interface addresses remain observed for topology/ECS/health events, but startup, reload, and network events never synthesize gateway-address routing rules. Configure [explicit local rules](./routing.md#explicit-local-rules) when needed. Interface-list configuration changes themselves require restart. The startup sequence and the conditions that fail startup are in [Interface reconciliation](../design/datapath.md#interface-reconciliation).
 
 Real LAN bindings also receive an advisory [self-protection coverage check](./routing.md#explicit-local-rules). An unconfirmed result warns without rejecting startup/reload or inserting routing rules.
+
+## VPN server bypass
+
+For a VPN app running on the same host (IKEv2/IPsec, WireGuard, OpenVPN). Host-originated traffic on `wan_interface` whose destination is in `vpn_server_ip` **and** whose protocol and destination port are in `vpn_server_l4proto`/`vpn_server_port` is a VPN server flow.
+
+```
+global {
+    wan_interface: wlan0
+    vpn_server_ip: 203.0.113.0/24
+    vpn_server_port: 500, 4500
+    vpn_interface_address: 10.8.0.0/16
+}
+```
+
+- While the VPN is ready, new VPN server flows go direct, ignoring routing rules and the Clash mode.
+- Otherwise routing rules apply as usual; add a rule if the handshake must use a proxy before the tunnel is up.
+- A TCP connection keeps the path chosen when it opened. UDP follows the current state, so a tunnel moves to the direct path once ready and the server sees a new source address and port; IKEv2 NAT-T and WireGuard handle this.
+- LAN-forwarded traffic is not affected.
+
+The VPN is ready while an UP `tun*` or `ipsec*` interface other than honk's own has a global unicast address (inside `vpn_interface_address` when set). A `tun*` interface becomes ready once its packet counters grow; an `ipsec*` interface while it has a default route outside the local table. Set `vpn_interface_address` on Android, where firewall or ad-block VpnService apps and Wi-Fi calling also create such interfaces. Readiness is visible in `GET /api/v1/datapath`.
+
+`vpn_server_port` is required with `vpn_server_ip` and must not include 53, which DNS handling keeps. Default routes are rejected, the ports times protocols must not exceed 4096, and `wan_interface` must be set. Changing any of these keys requires a restart.
 
 ## Dial modes
 
