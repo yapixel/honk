@@ -380,6 +380,8 @@ impl RealEbpfBackend {
             receive_trace_attempted: false,
             udp_staging_quiesce_incomplete: false,
             aux_deletes: Default::default(),
+            vpn_gate_enabled: false,
+            vpn_bypass_interface: None,
         })
     }
 

@@ -547,6 +547,12 @@ pub const DATAPATH_FLAG_NFQ_ENABLED: u32 = 1 << 3;
 /// The queue and its owned nftables rule are ready to hold staged packets.
 pub const DATAPATH_FLAG_NFQ_READY: u32 = 1 << 4;
 
+/// VPN server bypass gate is configured; when clear the datapath never touches the gate maps.
+pub const DATAPATH_FLAG_VPN_GATE: u32 = 1 << 5;
+
+/// VPN connection is ready; matching new flows go direct.
+pub const DATAPATH_FLAG_VPN_READY: u32 = 1 << 6;
+
 /// LPM trie key for IP/CIDR routing.
 /// Matches the kernel's `struct bpf_lpm_trie_key` layout:
 /// prefixlen (u32) + data (4 × u32 = IPv6 / IPv4-mapped).

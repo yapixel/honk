@@ -38,8 +38,17 @@ struct Datapath {
     kind: &'static str,
     state: &'static str,
     visibility: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vpn_server_bypass: Option<VpnServerBypassDetail>,
     ebpf: Option<EbpfDetail>,
     errors: Vec<SafeError>,
+}
+
+#[derive(Serialize)]
+pub(super) struct VpnServerBypassDetail {
+    enabled: bool,
+    ready: bool,
+    interface: Option<String>,
 }
 
 /// The kernel detail is optional in the contract: `detail=summary` (the
@@ -212,11 +221,21 @@ pub(super) fn summary(
 
 fn detail(observation: DatapathObservation, instance: &str, healthy: bool, full: bool) -> Datapath {
     let summary = summary(&observation, instance, healthy);
+    let vpn_server_bypass =
+        observation
+            .vpn_server_bypass
+            .as_ref()
+            .map(|vpn| VpnServerBypassDetail {
+                enabled: vpn.enabled,
+                ready: vpn.ready,
+                interface: vpn.interface.clone(),
+            });
     Datapath {
         observed_at: timestamp(SystemTime::now()),
         kind: summary.kind,
         state: summary.state,
         visibility: summary.visibility,
+        vpn_server_bypass,
         ebpf: summary.ebpf.map(|summary| EbpfDetail {
             summary,
             attachments: full.then(|| {
@@ -465,5 +484,37 @@ mod tests {
         assert_eq!(summary.state, "detached");
         assert_eq!(ebpf.hooks, "detached");
         assert_eq!(ebpf.health, "unknown");
+    }
+
+    #[test]
+    fn vpn_server_bypass_observation_serialization() {
+        let mut observation = DatapathObservation::unknown(DatapathKind::Mock);
+        assert!(observation.vpn_server_bypass.is_none());
+        let body =
+            serde_json::to_value(detail(observation.clone(), "instance", true, false)).unwrap();
+        assert!(body.get("vpn_server_bypass").is_none());
+
+        observation.vpn_server_bypass = Some(crate::ebpf::VpnServerBypassObservation {
+            enabled: true,
+            ready: false,
+            interface: None,
+        });
+        let body =
+            serde_json::to_value(detail(observation.clone(), "instance", true, false)).unwrap();
+        let bypass = body.get("vpn_server_bypass").unwrap();
+        assert_eq!(bypass["enabled"], true);
+        assert_eq!(bypass["ready"], false);
+        assert!(bypass["interface"].is_null());
+
+        observation.vpn_server_bypass = Some(crate::ebpf::VpnServerBypassObservation {
+            enabled: true,
+            ready: true,
+            interface: Some("tun0".to_owned()),
+        });
+        let body = serde_json::to_value(detail(observation, "instance", true, false)).unwrap();
+        let bypass = body.get("vpn_server_bypass").unwrap();
+        assert_eq!(bypass["enabled"], true);
+        assert_eq!(bypass["ready"], true);
+        assert_eq!(bypass["interface"], "tun0");
     }
 }

@@ -40,7 +40,7 @@ async fn owner(
     let backend: Backend = Arc::new(tokio::sync::RwLock::new(Box::new(MockEbpfBackend::new())));
     let state: SharedModeState = Arc::new(parking_lot::RwLock::new(mode));
     let flags = DatapathFlagsHandle::new(backend.clone(), state, cache);
-    flags.initialize(true, true).await.unwrap();
+    flags.initialize(true, true, false).await.unwrap();
     (flags, backend)
 }
 

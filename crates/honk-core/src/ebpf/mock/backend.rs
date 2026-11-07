@@ -8,7 +8,9 @@ impl EbpfBackend for MockEbpfBackend {
         if let Some(observation) = &self.datapath_observation_fixture {
             return observation.clone();
         }
-        ebpf::DatapathObservation::unknown(ebpf::DatapathKind::Mock)
+        let mut observation = ebpf::DatapathObservation::unknown(ebpf::DatapathKind::Mock);
+        observation.vpn_server_bypass = self.vpn_server_bypass.clone();
+        observation
     }
 
     #[cfg(test)]
@@ -123,6 +125,12 @@ impl EbpfBackend for MockEbpfBackend {
 
     fn set_datapath_flags(&mut self, flags: u32) -> anyhow::Result<()> {
         self.datapath_flags_writes.lock().push(flags);
+        if let Some(obs) = &mut self.vpn_server_bypass {
+            obs.ready = (flags & honk_ebpf_common::DATAPATH_FLAG_VPN_READY) != 0;
+            if !obs.ready {
+                obs.interface = None;
+            }
+        }
         #[cfg(test)]
         {
             self.datapath_flags_writes_after_arm =
@@ -142,6 +150,24 @@ impl EbpfBackend for MockEbpfBackend {
             }
         }
         Ok(())
+    }
+
+    fn populate_vpn_gate(
+        &mut self,
+        _gate: &honk_config::config::VpnServerBypass,
+    ) -> anyhow::Result<()> {
+        self.vpn_server_bypass = Some(ebpf::VpnServerBypassObservation {
+            enabled: true,
+            ready: false,
+            interface: None,
+        });
+        Ok(())
+    }
+
+    fn set_vpn_bypass_interface(&mut self, interface: Option<String>) {
+        if let Some(obs) = &mut self.vpn_server_bypass {
+            obs.interface = interface;
+        }
     }
 
     #[cfg(test)]

@@ -297,6 +297,8 @@ struct DatapathFlagsState {
     nfqueue_enabled: bool,
     nfqueue_ready: bool,
     trace_enabled: bool,
+    vpn_gate: bool,
+    vpn_ready: bool,
     initialized: bool,
     quiescence_failed: bool,
 }
@@ -312,6 +314,12 @@ impl DatapathFlagsState {
         }
         if self.trace_enabled {
             flags |= honk_ebpf_common::DATAPATH_FLAG_TRACE_ENABLED;
+        }
+        if self.vpn_gate {
+            flags |= honk_ebpf_common::DATAPATH_FLAG_VPN_GATE;
+            if self.vpn_ready {
+                flags |= honk_ebpf_common::DATAPATH_FLAG_VPN_READY;
+            }
         }
         flags
     }
@@ -346,6 +354,8 @@ impl DatapathFlagsHandle {
                     nfqueue_enabled: false,
                     nfqueue_ready: false,
                     trace_enabled: false,
+                    vpn_gate: false,
+                    vpn_ready: false,
                     initialized: false,
                     quiescence_failed: false,
                 },
@@ -484,13 +494,26 @@ impl DatapathFlagsHandle {
         &self,
         nfqueue_enabled: bool,
         nfqueue_ready: bool,
+        vpn_gate: bool,
     ) -> anyhow::Result<()> {
         self.update(false, |state, _| {
             anyhow::ensure!(!state.initialized, "datapath flags are already initialized");
             state.nfqueue_enabled = nfqueue_enabled;
             state.nfqueue_ready = nfqueue_enabled && nfqueue_ready;
+            state.vpn_gate = vpn_gate;
+            state.vpn_ready = false;
             state.initialized = true;
             state.quiescence_failed = false;
+            Ok(Persistence::None)
+        })
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn set_vpn_ready(&self, ready: bool) -> anyhow::Result<()> {
+        self.update(false, |state, _| {
+            anyhow::ensure!(state.initialized, "datapath flags are not initialized");
+            state.vpn_ready = ready;
             Ok(Persistence::None)
         })
         .await
@@ -589,6 +612,8 @@ impl DatapathFlagsHandle {
             state.nfqueue_enabled = false;
             state.nfqueue_ready = false;
             state.trace_enabled = false;
+            state.vpn_gate = false;
+            state.vpn_ready = false;
             state.initialized = false;
             Ok(Persistence::None)
         })
@@ -630,6 +655,73 @@ impl DatapathFlagsPublication<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vpn_bypass_datapath_flags_composition() {
+        use honk_ebpf_common::{
+            DATAPATH_FLAG_NFQ_ENABLED, DATAPATH_FLAG_NFQ_READY, DATAPATH_FLAG_OFFLOAD_RULE_DIRECT,
+            DATAPATH_FLAG_TRACE_ENABLED, DATAPATH_FLAG_VPN_GATE, DATAPATH_FLAG_VPN_READY,
+        };
+
+        let mode = ModeState::new("rule", "proxy");
+
+        // Gate off, ready off
+        let mut state = DatapathFlagsState {
+            nfqueue_enabled: true,
+            nfqueue_ready: true,
+            trace_enabled: true,
+            vpn_gate: false,
+            vpn_ready: false,
+            initialized: true,
+            quiescence_failed: false,
+        };
+        let flags = state.compose(&mode);
+        assert_eq!(
+            flags,
+            DATAPATH_FLAG_OFFLOAD_RULE_DIRECT
+                | DATAPATH_FLAG_NFQ_ENABLED
+                | DATAPATH_FLAG_NFQ_READY
+                | DATAPATH_FLAG_TRACE_ENABLED
+        );
+
+        // Gate on, ready off
+        state.vpn_gate = true;
+        state.vpn_ready = false;
+        let flags = state.compose(&mode);
+        assert_eq!(
+            flags,
+            DATAPATH_FLAG_OFFLOAD_RULE_DIRECT
+                | DATAPATH_FLAG_NFQ_ENABLED
+                | DATAPATH_FLAG_NFQ_READY
+                | DATAPATH_FLAG_TRACE_ENABLED
+                | DATAPATH_FLAG_VPN_GATE
+        );
+
+        // Gate on, ready on
+        state.vpn_ready = true;
+        let flags = state.compose(&mode);
+        assert_eq!(
+            flags,
+            DATAPATH_FLAG_OFFLOAD_RULE_DIRECT
+                | DATAPATH_FLAG_NFQ_ENABLED
+                | DATAPATH_FLAG_NFQ_READY
+                | DATAPATH_FLAG_TRACE_ENABLED
+                | DATAPATH_FLAG_VPN_GATE
+                | DATAPATH_FLAG_VPN_READY
+        );
+
+        // Clearing ready preserves gate and all other bits
+        state.vpn_ready = false;
+        let flags = state.compose(&mode);
+        assert_eq!(
+            flags,
+            DATAPATH_FLAG_OFFLOAD_RULE_DIRECT
+                | DATAPATH_FLAG_NFQ_ENABLED
+                | DATAPATH_FLAG_NFQ_READY
+                | DATAPATH_FLAG_TRACE_ENABLED
+                | DATAPATH_FLAG_VPN_GATE
+        );
+    }
 
     #[test]
     fn test_direct_offload_mode_bits() {
@@ -742,7 +834,7 @@ mod tests {
         };
 
         let (handle, state, writes, _) = flags_fixture();
-        handle.initialize(true, true).await.unwrap();
+        handle.initialize(true, true, false).await.unwrap();
         handle.fence_nfqueue().await.unwrap();
         let fenced_at = writes.lock().len();
         let (mode_result, selection_result) = tokio::join!(
@@ -780,7 +872,7 @@ mod tests {
         let state = Arc::new(parking_lot::RwLock::new(ModeState::new("Rule", "Proxy")));
         let handle = DatapathFlagsHandle::new(Arc::clone(&backend), state, None);
 
-        handle.initialize(true, true).await.unwrap();
+        handle.initialize(true, true, false).await.unwrap();
         handle.fence_nfqueue().await.unwrap();
         assert!(
             backend
@@ -800,7 +892,7 @@ mod tests {
         };
 
         let (handle, state, writes, backend) = flags_fixture();
-        handle.initialize(true, true).await.unwrap();
+        handle.initialize(true, true, false).await.unwrap();
         let backend_guard = backend.write().await;
         let pending = {
             let handle = handle.clone();
@@ -829,7 +921,7 @@ mod tests {
             DATAPATH_FLAG_OFFLOAD_ALL as ALL, DATAPATH_FLAG_TRACE_ENABLED as TRACE,
         };
         let (handle, _, writes, backend) = flags_fixture();
-        handle.initialize(true, true).await.unwrap();
+        handle.initialize(true, true, false).await.unwrap();
         for (previous, desired) in [(false, true), (true, false)] {
             backend
                 .write()
@@ -884,7 +976,7 @@ mod tests {
         use honk_ebpf_common::DATAPATH_FLAG_TRACE_ENABLED as TRACE;
         use std::sync::atomic::{AtomicBool, Ordering};
         let (handle, _, writes, backend) = flags_fixture();
-        handle.initialize(true, true).await.unwrap();
+        handle.initialize(true, true, false).await.unwrap();
         let recording = AtomicBool::new(true);
         let held = backend.write().await;
         let pending = handle.reconcile_kernel_trace(|| recording.load(Ordering::Acquire));

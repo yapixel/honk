@@ -169,7 +169,10 @@ async fn spawn_app_with_config(mut config: Config, secret: &str, external_ui: &s
     control.set_mode_state(Arc::clone(&mode_state));
     control.start_datapath_flags_coordinator().unwrap();
     let datapath_flags = control.datapath_flags_handle().unwrap();
-    datapath_flags.initialize(false, false).await.unwrap();
+    datapath_flags
+        .initialize(false, false, false)
+        .await
+        .unwrap();
     let stats = control.stats_handle();
     let connection_tracker = control.connection_tracker();
     let state = Arc::new(ClashState {

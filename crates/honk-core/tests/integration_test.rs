@@ -482,7 +482,7 @@ async fn test_merge_subscription_nodes_full_pipeline() {
     cp.start_datapath_flags_coordinator().unwrap();
     cp.datapath_flags_handle()
         .unwrap()
-        .initialize(false, false)
+        .initialize(false, false, false)
         .await
         .unwrap();
 

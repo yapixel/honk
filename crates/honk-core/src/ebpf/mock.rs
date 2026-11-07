@@ -193,6 +193,7 @@ pub struct MockEbpfBackend {
     pub datapath_observation_fixture: Option<super::DatapathObservation>,
     #[cfg(test)]
     pub pname_support: super::PnameSupport,
+    pub vpn_server_bypass: Option<super::VpnServerBypassObservation>,
 }
 
 impl MockEbpfBackend {

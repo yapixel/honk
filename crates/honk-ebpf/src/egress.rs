@@ -215,6 +215,33 @@ pub fn do_tproxy_lan_egress(ctx: &TcContext, link_h_len: u32) -> Verdict {
     Ok(TC_ACT_UNSPEC)
 }
 
+/// New host-originated flows to a configured VPN server go direct once the VPN is ready.
+#[inline(never)]
+fn vpn_gate_direct(flags: u32, tuples: &Tuples) -> bool {
+    const REQUIRED: u32 =
+        honk_ebpf_common::DATAPATH_FLAG_VPN_GATE | honk_ebpf_common::DATAPATH_FLAG_VPN_READY;
+    if flags & REQUIRED != REQUIRED {
+        return false;
+    }
+
+    let port_key: u32 = ((tuples.five.l4proto as u32) << 16) | (tuples.five.dst_port as u32);
+    if unsafe { crate::maps::VPN_SERVER_PORT.get(&port_key) }.is_none() {
+        return false;
+    }
+
+    let bytes = tuples.five.dst_ip.as_bytes();
+    let lpm_key = aya_ebpf::btf_maps::lpm_trie::Key::new(
+        128,
+        [
+            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+            u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+        ],
+    );
+    crate::maps::VPN_SERVER_IP.get(&lpm_key).is_some()
+}
+
 /// WAN egress TCP handler: route new connections and cache the decision;
 /// for established flows, reuse the cached routing.
 #[inline(always)]
@@ -277,21 +304,28 @@ fn do_tproxy_wan_egress_tcp(
             true,
         );
         let flags = crate::maps::datapath_flags();
-        let (mut decision, generation) = match crate::route::route(
-            &mut pkt.routing_input,
-            pname,
-            flags,
-            &mut pkt.route_witness.output,
-        ) {
-            Ok(result) => result,
-            Err(_) => return Err(TC_ACT_SHOT),
-        };
-        routing_generation = generation;
+        if vpn_gate_direct(flags, tuples) {
+            outbound = OUTBOUND_DIRECT;
+            mark = 0;
+            must = false;
+            routing_generation = 0;
+        } else {
+            let (mut decision, generation) = match crate::route::route(
+                &mut pkt.routing_input,
+                pname,
+                flags,
+                &mut pkt.route_witness.output,
+            ) {
+                Ok(result) => result,
+                Err(_) => return Err(TC_ACT_SHOT),
+            };
+            routing_generation = generation;
 
-        decision.apply_mode_flags(flags, tuples.five.dst_port);
-        outbound = decision.handoff_outbound();
-        mark = decision.mark;
-        must = decision.must != 0;
+            decision.apply_mode_flags(flags, tuples.five.dst_port);
+            outbound = decision.handoff_outbound();
+            mark = decision.mark;
+            must = decision.must != 0;
+        }
         let must_val = must as u8;
 
         let dscp = tuples.dscp;
@@ -684,21 +718,32 @@ fn do_tproxy_wan_egress_udp(
         true,
     );
     let flags = crate::maps::datapath_flags();
-    let (mut decision, generation) = match crate::route::route(
-        &mut pkt.routing_input,
-        pname,
-        flags,
-        &mut pkt.route_witness.output,
-    ) {
-        Ok(result) => result,
-        Err(_) => return Err(TC_ACT_SHOT),
-    };
-    let routing_generation = generation;
+    let routing_generation: u64;
+    let direct_mark_index: u32;
+    if vpn_gate_direct(flags, tuples) {
+        outbound = OUTBOUND_DIRECT;
+        mark = 0;
+        must = false;
+        routing_generation = 0;
+        direct_mark_index = u32::MAX;
+    } else {
+        let (mut decision, generation) = match crate::route::route(
+            &mut pkt.routing_input,
+            pname,
+            flags,
+            &mut pkt.route_witness.output,
+        ) {
+            Ok(result) => result,
+            Err(_) => return Err(TC_ACT_SHOT),
+        };
+        routing_generation = generation;
 
-    decision.apply_mode_flags(flags, tuples.five.dst_port);
-    outbound = decision.handoff_outbound();
-    mark = decision.mark;
-    must = decision.must != 0;
+        decision.apply_mode_flags(flags, tuples.five.dst_port);
+        outbound = decision.handoff_outbound();
+        mark = decision.mark;
+        must = decision.must != 0;
+        direct_mark_index = decision.direct_mark_index;
+    }
     let trace_id = if outbound == OUTBOUND_BLOCK
         || (outbound == OUTBOUND_DIRECT && mark == 0 && (!dns || must))
     {
@@ -759,7 +804,7 @@ fn do_tproxy_wan_egress_udp(
         decision_token,
         routing_generation,
         trace_id,
-        decision.direct_mark_index,
+        direct_mark_index,
         pkt.incarnation,
     )
 }

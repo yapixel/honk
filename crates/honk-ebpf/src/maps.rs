@@ -1,7 +1,7 @@
 use aya_ebpf::Global;
 use aya_ebpf::btf_maps::{
-    Array, ArrayOfMaps, HashMap, LruHashMap, LruPerCpuHashMap, PerCpuArray, RingBuf, SkStorage,
-    SockMap,
+    Array, ArrayOfMaps, HashMap, LpmTrie, LruHashMap, LruPerCpuHashMap, PerCpuArray, RingBuf,
+    SkStorage, SockMap,
 };
 use aya_ebpf::macros::btf_map;
 use honk_ebpf_common::conn::{
@@ -277,3 +277,9 @@ pub static UDP_DECISION_SCRATCH_MAP: PerCpuArray<UdpDecisionScratch, 1> = PerCpu
 
 #[btf_map]
 pub static CONNTRACK_SNAPSHOT_MAP: PerCpuArray<ConnState, 1> = PerCpuArray::new();
+
+#[btf_map]
+pub static VPN_SERVER_IP: LpmTrie<[u32; 4], u8, 4096> = LpmTrie::new();
+
+#[btf_map]
+pub static VPN_SERVER_PORT: HashMap<u32, u8, 4096> = HashMap::new();

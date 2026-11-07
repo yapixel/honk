@@ -44,6 +44,7 @@ pub mod tcp_sniff;
 mod udp_dial;
 pub mod udp_endpoint;
 mod udp_ingress;
+pub(crate) mod vpn_ready;
 use crate::connection_tracker::ConnectionTracker;
 use crate::control::packet_sniffer::PacketSnifferPool;
 use crate::control::udp_endpoint::{EndpointReservation, UdpEndpointPool, UdpInitLease};
@@ -228,6 +229,7 @@ pub struct ControlPlane {
     /// shutdown so it cannot re-attach hooks mid-drain.
     #[cfg(feature = "ebpf")]
     iface_watcher: Option<crate::ebpf::real::IfaceWatcher>,
+    vpn_watcher: Option<vpn_ready::VpnWatcher>,
 }
 
 pub(in crate::control) use retirement_worker::spawn_retirement_worker;
@@ -302,10 +304,11 @@ impl ControlPlane {
         nfqueue_enabled: bool,
         nfqueue_ready: bool,
     ) -> anyhow::Result<()> {
+        let vpn_gate = !self.config.read().await.global.vpn_server_ip.is_empty();
         self.datapath_flags
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("datapath flags writer is not running"))?
-            .initialize(nfqueue_enabled, nfqueue_ready)
+            .initialize(nfqueue_enabled, nfqueue_ready, vpn_gate)
             .await
     }
 

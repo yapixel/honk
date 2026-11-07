@@ -509,6 +509,9 @@ impl ControlPlane {
                     }
                 }
                 self.alive_set.notify_network_change();
+                if let Some(watcher) = &self.vpn_watcher {
+                    watcher.notify();
+                }
             }
             ControlCommand::Shutdown => return false,
         }

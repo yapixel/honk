@@ -319,6 +319,7 @@ impl ControlPlane {
             pre_dns_publication_hook: parking_lot::Mutex::new(None),
             #[cfg(feature = "ebpf")]
             iface_watcher: None,
+            vpn_watcher: None,
         };
 
         // interrupt_connections: when a group's selected node changes, close

@@ -2,7 +2,7 @@ use super::*;
 use crate::ebpf::interface::{Binding, Direction};
 use crate::ebpf::{
     DatapathAttachment, DatapathCheck, DatapathKind, DatapathObservation, DatapathObservationError,
-    DatapathProgram, MAX_DATAPATH_ATTACHMENTS, MAX_DATAPATH_PROGRAMS,
+    DatapathProgram, MAX_DATAPATH_ATTACHMENTS, MAX_DATAPATH_PROGRAMS, VpnServerBypassObservation,
 };
 use aya::maps::IterableMap;
 use aya::programs::{ProgramError, links::FdLink};
@@ -63,6 +63,24 @@ impl RealEbpfBackend {
         {
             Ok(capacity) => result.conn_state_capacity = Some(capacity),
             Err(_) => result.record_error(DatapathObservationError::Maps),
+        }
+        let flags = self
+            .array_get::<u32>("DATAPATH_FLAGS_MAP", 0)
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let gate_flag = (flags & honk_ebpf_common::DATAPATH_FLAG_VPN_GATE) != 0;
+        if self.vpn_gate_enabled || gate_flag {
+            let ready = (flags & honk_ebpf_common::DATAPATH_FLAG_VPN_READY) != 0;
+            result.vpn_server_bypass = Some(VpnServerBypassObservation {
+                enabled: true,
+                ready,
+                interface: if ready {
+                    self.vpn_bypass_interface.clone()
+                } else {
+                    None
+                },
+            });
         }
         // A retained link FD alone does not prove its hook is still installed.
         // TCX queries below check the host interfaces and dae0. aya exposes no

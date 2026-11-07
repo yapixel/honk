@@ -209,6 +209,9 @@ impl ControlPlane {
         if let Some(watcher) = self.iface_watcher.take() {
             watcher.shutdown(STAGE_TIMEOUT).await;
         }
+        if let Some(watcher) = self.vpn_watcher.take() {
+            watcher.shutdown(STAGE_TIMEOUT).await;
+        }
         // No watcher can reattach after this terminal boundary.
         retain_error(&mut fatal, self.ebpf.write().await.detach_hooks());
         if self.health_task.is_some() {

@@ -160,9 +160,128 @@ pub struct GlobalConfig {
     /// built-in direct/block dials are exempt.
     #[serde(default = "default_max_concurrent_dials")]
     pub max_concurrent_dials: usize,
+    #[serde(default)]
+    pub vpn_server_ip: Vec<String>,
+    #[serde(default)]
+    pub vpn_server_port: Vec<String>,
+    #[serde(default)]
+    pub vpn_server_l4proto: Vec<String>,
+    #[serde(default)]
+    pub vpn_interface_address: Vec<String>,
 }
 
+/// Parsed `vpn_server_*` gate settings shared by validation and the datapath.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnServerBypass {
+    pub ip: Vec<ipnet::IpNet>,
+    /// Inclusive destination port ranges.
+    pub ports: Vec<(u16, u16)>,
+    /// IP protocol numbers (TCP 6, UDP 17).
+    pub protocols: Vec<u8>,
+    pub interface_address: Vec<ipnet::IpNet>,
+}
+
+/// Mirrors the kernel `VPN_SERVER_PORT` capacity.
+const VPN_SERVER_PORT_CAPACITY: usize = 4096;
+
 impl GlobalConfig {
+    /// `Ok(None)` when the gate is off; errors name the offending field.
+    pub fn vpn_server_bypass(
+        &self,
+    ) -> Result<Option<VpnServerBypass>, (&'static str, &'static str)> {
+        let nets = |field: &'static str, values: &[String]| {
+            values
+                .iter()
+                .map(|value| {
+                    crate::dns::decode_ip_or_cidr(value)
+                        .map(|decoded| decoded.network)
+                        .ok_or((field, "must contain IP addresses or CIDRs"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let g = self;
+        if g.vpn_server_ip.is_empty() {
+            for (field, values) in [
+                ("vpn_server_port", &g.vpn_server_port),
+                ("vpn_server_l4proto", &g.vpn_server_l4proto),
+                ("vpn_interface_address", &g.vpn_interface_address),
+            ] {
+                if !values.is_empty() {
+                    return Err((field, "requires vpn_server_ip"));
+                }
+            }
+            return Ok(None);
+        }
+        if g.wan_interface.iter().all(|iface| iface.trim().is_empty()) {
+            return Err((
+                "wan_interface",
+                "is required when vpn_server_ip is configured",
+            ));
+        }
+        let ip = nets("vpn_server_ip", &g.vpn_server_ip)?;
+        if ip.iter().any(|net| net.prefix_len() == 0) {
+            return Err(("vpn_server_ip", "cannot be a default route (/0)"));
+        }
+        if g.vpn_server_port.is_empty() {
+            return Err((
+                "vpn_server_port",
+                "is required when vpn_server_ip is configured",
+            ));
+        }
+        let mut ports = Vec::new();
+        for value in &g.vpn_server_port {
+            let value = value.trim();
+            let (start, end) = value.split_once('-').unwrap_or((value, value));
+            let (Ok(start), Ok(end)) = (start.trim().parse::<u16>(), end.trim().parse::<u16>())
+            else {
+                return Err(("vpn_server_port", "must contain ports or start-end ranges"));
+            };
+            if start == 0 || start > end {
+                return Err((
+                    "vpn_server_port",
+                    "must be within 1-65535 with start <= end",
+                ));
+            }
+            if (start..=end).contains(&53) {
+                return Err((
+                    "vpn_server_port",
+                    "cannot include port 53 (DNS hijacking takes precedence)",
+                ));
+            }
+            ports.push((start, end));
+        }
+        let mut protocols = Vec::new();
+        for value in &g.vpn_server_l4proto {
+            let protocol = match value.trim().to_ascii_lowercase().as_str() {
+                "tcp" => 6,
+                "udp" => 17,
+                _ => return Err(("vpn_server_l4proto", "only accepts tcp and udp")),
+            };
+            if !protocols.contains(&protocol) {
+                protocols.push(protocol);
+            }
+        }
+        if protocols.is_empty() {
+            protocols = vec![6, 17];
+        }
+        let distinct_ports = ports
+            .iter()
+            .flat_map(|&(start, end)| start..=end)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        if distinct_ports * protocols.len() > VPN_SERVER_PORT_CAPACITY {
+            return Err((
+                "vpn_server_port",
+                "expands to more than 4096 port/protocol entries",
+            ));
+        }
+        Ok(Some(VpnServerBypass {
+            ip,
+            ports,
+            protocols,
+            interface_address: nets("vpn_interface_address", &g.vpn_interface_address)?,
+        }))
+    }
     /// Process socket mark; zero retains the historical bypass mark.
     pub fn effective_so_mark(&self) -> u32 {
         if self.so_mark_from_dae == 0 {
@@ -414,6 +533,10 @@ impl Default for GlobalConfig {
             preconnect_node_count: default_preconnect_node_count(),
             udp_warm_node_count: default_udp_warm_node_count(),
             max_concurrent_dials: default_max_concurrent_dials(),
+            vpn_server_ip: Vec::new(),
+            vpn_server_port: Vec::new(),
+            vpn_server_l4proto: Vec::new(),
+            vpn_interface_address: Vec::new(),
         }
     }
 }
@@ -854,6 +977,16 @@ impl Config {
                 "routing mark overlaps datapath-reserved mark bits",
             ));
         }
+
+        if let Err((field, message)) = self.global.vpn_server_bypass() {
+            return Err(config_validation_error(
+                source,
+                SettingPath::new("global").field(field),
+                "invalid-config-value",
+                message,
+            ));
+        }
+
         Ok(())
     }
 
@@ -1856,5 +1989,75 @@ mod builtin_nodes_tests {
         let error = config.validate_detailed().unwrap_err();
         assert_eq!(error.diagnostic.code, "invalid-config-value");
         assert_eq!(error.diagnostic.setting.to_string(), "groups[1].name");
+    }
+
+    #[test]
+    fn test_vpn_bypass_validation() {
+        let mut config = Config::default();
+        config.global.wan_interface = vec!["eth0".into()];
+        config.global.vpn_server_ip = vec!["198.51.100.1".into(), "2001:db8::/32".into()];
+        config.global.vpn_server_port = vec!["4500".into(), "5000-5010".into()];
+        config.global.vpn_server_l4proto = vec!["udp".into(), "tcp".into()];
+        config.global.vpn_interface_address = vec!["10.0.0.1/32".into()];
+        assert!(config.validate_detailed().is_ok());
+
+        // Default route rejected
+        let mut bad_ip = config.clone();
+        bad_ip.global.vpn_server_ip = vec!["0.0.0.0/0".into()];
+        assert!(bad_ip.validate_detailed().is_err());
+        bad_ip.global.vpn_server_ip = vec!["::/0".into()];
+        assert!(bad_ip.validate_detailed().is_err());
+
+        // Invalid IP rejected
+        let mut bad_ip2 = config.clone();
+        bad_ip2.global.vpn_server_ip = vec!["not_an_ip".into()];
+        assert!(bad_ip2.validate_detailed().is_err());
+
+        // Port 53 rejected
+        let mut bad_port = config.clone();
+        bad_port.global.vpn_server_port = vec!["53".into()];
+        assert!(bad_port.validate_detailed().is_err());
+        bad_port.global.vpn_server_port = vec!["50-60".into()];
+        assert!(bad_port.validate_detailed().is_err());
+
+        // Port 0 rejected
+        bad_port.global.vpn_server_port = vec!["0".into()];
+        assert!(bad_port.validate_detailed().is_err());
+
+        // Port range start > end rejected
+        bad_port.global.vpn_server_port = vec!["100-50".into()];
+        assert!(bad_port.validate_detailed().is_err());
+
+        // Missing wan_interface rejected
+        let mut bad_wan = config.clone();
+        bad_wan.global.wan_interface.clear();
+        assert!(bad_wan.validate_detailed().is_err());
+
+        // Missing port rejected
+        let mut no_port = config.clone();
+        no_port.global.vpn_server_port.clear();
+        assert!(no_port.validate_detailed().is_err());
+
+        // Invalid l4proto rejected
+        let mut bad_proto = config.clone();
+        bad_proto.global.vpn_server_l4proto = vec!["icmp".into()];
+        assert!(bad_proto.validate_detailed().is_err());
+
+        // Port/proto without vpn_server_ip rejected
+        let mut no_ip = Config::default();
+        no_ip.global.vpn_server_port = vec!["4500".into()];
+        assert!(no_ip.validate_detailed().is_err());
+        let mut no_ip2 = Config::default();
+        no_ip2.global.vpn_server_l4proto = vec!["udp".into()];
+        assert!(no_ip2.validate_detailed().is_err());
+        let mut no_ip3 = Config::default();
+        no_ip3.global.vpn_interface_address = vec!["10.0.0.1/32".into()];
+        assert!(no_ip3.validate_detailed().is_err());
+
+        // Over 4096 entries rejected
+        let mut big = config.clone();
+        big.global.vpn_server_l4proto.clear(); // default: both tcp and udp = 2
+        big.global.vpn_server_port = vec!["1-2049".into()]; // 2049 * 2 = 4098 > 4096
+        assert!(big.validate_detailed().is_err());
     }
 }

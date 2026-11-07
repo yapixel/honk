@@ -522,8 +522,24 @@ impl ControlPlane {
             .is_some_and(|queue| queue.sequence_ready);
         #[cfg(not(feature = "ebpf"))]
         let queue_ready = false;
+        let vpn_gate = self.config.read().await.global.vpn_server_bypass();
+        let parsed_gate =
+            vpn_gate.map_err(|(field, message)| anyhow::anyhow!("{field} {message}"))?;
+        if let Some(gate) = &parsed_gate {
+            self.ebpf.write().await.populate_vpn_gate(gate)?;
+        }
         self.initialize_datapath_flags(epoch.listeners.nfqueue_enabled, queue_ready)
             .await?;
+        if let Some(gate) = parsed_gate
+            && let Some(flags) = self.datapath_flags.as_ref()
+        {
+            self.vpn_watcher = Some(super::vpn_ready::VpnWatcher::spawn(
+                gate,
+                flags.clone(),
+                Arc::clone(&self.ebpf),
+                self.udp_pool.clone(),
+            ));
+        }
         #[cfg(feature = "ebpf")]
         if let Some(queue) = epoch.queue.as_ref()
             && queue.sequence_ready

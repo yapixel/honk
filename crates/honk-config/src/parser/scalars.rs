@@ -102,6 +102,10 @@ pub(super) const GLOBAL_KEYS: &[&str] = &[
     "udp_warm_node_count",
     "preconnect_node_count",
     "max_concurrent_dials",
+    "vpn_server_ip",
+    "vpn_server_port",
+    "vpn_server_l4proto",
+    "vpn_interface_address",
 ];
 
 fn raw_fields<'d, 'a>(
@@ -541,6 +545,18 @@ pub(super) fn parse_global_section(
                 "expected a nonnegative integer",
             )
         })?;
+    }
+    if let Some(value) = settings.get("vpn_server_ip") {
+        cfg.vpn_server_ip = list_value(*value, ListOptions::NEW, diagnostics);
+    }
+    if let Some(value) = settings.get("vpn_server_port") {
+        cfg.vpn_server_port = list_value(*value, ListOptions::NEW, diagnostics);
+    }
+    if let Some(value) = settings.get("vpn_server_l4proto") {
+        cfg.vpn_server_l4proto = list_value(*value, ListOptions::NEW, diagnostics);
+    }
+    if let Some(value) = settings.get("vpn_interface_address") {
+        cfg.vpn_interface_address = list_value(*value, ListOptions::NEW, diagnostics);
     }
 
     crate::check::validate_dns_check_targets(&cfg.udp_check_dns).map_err(|mut error| {

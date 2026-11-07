@@ -149,6 +149,18 @@ pub(crate) fn restart_required_changes(
     if old_global.nfqueue_enable != new_global.nfqueue_enable {
         changed.push(field!("global.nfqueue_enable"));
     }
+    if old_global.vpn_server_ip != new_global.vpn_server_ip {
+        changed.push(field!("global.vpn_server_ip"));
+    }
+    if old_global.vpn_server_port != new_global.vpn_server_port {
+        changed.push(field!("global.vpn_server_port"));
+    }
+    if old_global.vpn_server_l4proto != new_global.vpn_server_l4proto {
+        changed.push(field!("global.vpn_server_l4proto"));
+    }
+    if old_global.vpn_interface_address != new_global.vpn_interface_address {
+        changed.push(field!("global.vpn_interface_address"));
+    }
 
     let old_api = &current.experimental.clash_api;
     let new_api = &candidate.experimental.clash_api;

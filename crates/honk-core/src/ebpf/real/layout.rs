@@ -236,6 +236,8 @@ pub(super) fn validate_loaded_maps(bpf: &Ebpf) -> anyhow::Result<()> {
         ("TCP_SOCKET_BINDING", BPF_MAP_TYPE_SK_STORAGE, 4, 120, 0, 1),
         ("AUX_OCCUPANCY", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8, 2, 0),
         ("ADMISSION_PRESSURE", BPF_MAP_TYPE_ARRAY, 4, 4, 1, 0),
+        ("VPN_SERVER_IP", BPF_MAP_TYPE_LPM_TRIE, 20, 1, 4096, 1),
+        ("VPN_SERVER_PORT", BPF_MAP_TYPE_HASH, 4, 1, 4096, 0),
     ] {
         syscall::validate_map_layout(bpf, name, type_, key, value, count, flags)?;
     }
