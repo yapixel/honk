@@ -35,7 +35,9 @@ impl Dae0Setup {
     }
 
     pub fn supports_redirect_peer(&self) -> bool {
-        matches!(self.link_kind, netlink::LinkPairKind::Netkit)
+        // shortcut: the veth exclusion came with the Android port without a recorded
+        // kernel cause; confirm on a device before applying it to Linux.
+        !cfg!(target_os = "android") || matches!(self.link_kind, netlink::LinkPairKind::Netkit)
     }
 
     fn new(
@@ -112,7 +114,8 @@ pub(crate) fn create_dae0_link() -> anyhow::Result<(Dae0Guard, Dae0Setup)> {
     // Stale-state cleanup (previous run): drop the compat bind-mount (the
     // FD-held namespace dies with its owner process) and any leftover dae0.
     // The singleton lock guarantees no live sibling owns these names.
-    if is_mountpoint(DAENS_NS_PATH) {
+    // /proc/mounts lists the canonical /run path, never the /var/run symlink.
+    if is_mountpoint(&format!("{DAENS_NETNS_DIR}/daens")) {
         let _ = nix::mount::umount2(DAENS_NS_PATH, nix::mount::MntFlags::MNT_DETACH);
     }
     if let Ok(idx) = netlink::ifindex_of("dae0")
@@ -721,17 +724,18 @@ mod tests {
     }
 
     #[test]
-    fn redirect_peer_requires_netkit_pair() {
+    fn redirect_peer_requires_netkit_pair_only_on_android() {
         let mac = [0x02, 0, 0, 0, 0, 1];
         assert!(
             Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Netkit)
                 .unwrap()
                 .supports_redirect_peer()
         );
-        assert!(
-            !Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Veth)
+        assert_eq!(
+            Dae0Setup::new(1, 2, mac, netlink::LinkPairKind::Veth)
                 .unwrap()
-                .supports_redirect_peer()
+                .supports_redirect_peer(),
+            !cfg!(target_os = "android")
         );
     }
 

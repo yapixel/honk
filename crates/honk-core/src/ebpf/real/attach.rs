@@ -54,9 +54,8 @@ impl RealEbpfBackend {
         let (dae0_ifindex, dae0peer_ifindex, dae0peer_mac) =
             (dae0.ifindex(), dae0.peer_ifindex(), dae0.peer_mac());
         let wan_ifindex = 0u32;
-        // Enable bpf_redirect_peer only for a real netkit dae0 pair on kernels
-        // >= 6.8, and also on backported
-        // LTS kernels that received the CVE-2024-37959 fix:
+        // Enable bpf_redirect_peer on kernels >= 6.8, and on backported LTS
+        // kernels that received the CVE-2024-37959 fix:
         //   5.15.164+, 6.1.99+, 6.6.40+
         // https://www.kernel.org/doc/Documentation/networking/netkit.rst
         let use_redirect_peer = match kernel_version() {
@@ -74,7 +73,7 @@ impl RealEbpfBackend {
                     1u8
                 } else if !dae0.supports_redirect_peer() {
                     info!(
-                        "dae0 uses a veth pair; bpf_redirect_peer is disabled and ordinary redirect will be used"
+                        "dae0 uses a veth pair on Android; bpf_redirect_peer is disabled and ordinary redirect will be used"
                     );
                     0u8
                 } else {
