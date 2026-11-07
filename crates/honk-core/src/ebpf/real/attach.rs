@@ -221,11 +221,6 @@ impl RealEbpfBackend {
         }
         // Required socket-lifetime identity capture. Keep every link owned by
         // the backend; missing support or a partial attachment is fatal.
-        // Android's netd already installs cgroup socket programs on the root
-        // cgroup, so these observer hooks must allow multiple programs. They
-        // only capture SK_STORAGE and return allow; they do not replace the
-        // platform's policy hooks. The TCP sock_ops proof below remains
-        // single-owner because it has a different child-proof contract.
         let mut cgroup_sock_links = Vec::new();
         let mut cgroup_sock_addr_links = Vec::new();
         let cgroup_path = detect_cgroup_path()
@@ -262,7 +257,7 @@ impl RealEbpfBackend {
             anyhow::anyhow!("required socket identity program {create_name} load: {error}")
         })?;
         let link_id = p
-            .attach(&cgroup_file, aya::programs::CgroupAttachMode::AllowMultiple)
+            .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
             .map_err(|error| {
                 anyhow::anyhow!("required socket identity program {create_name} attach: {error}")
             })?;
@@ -278,7 +273,7 @@ impl RealEbpfBackend {
                 anyhow::anyhow!("required socket identity program {name} load: {error}")
             })?;
             let link_id = p
-                .attach(&cgroup_file, aya::programs::CgroupAttachMode::AllowMultiple)
+                .attach(&cgroup_file, aya::programs::CgroupAttachMode::Single)
                 .map_err(|error| {
                     anyhow::anyhow!("required socket identity program {name} attach: {error}")
                 })?;
