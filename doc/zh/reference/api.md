@@ -752,9 +752,7 @@ admission 的结果是 `{operation_id,kind,status,href}`。轮询 `href` 返回�
 
 ### 配置数据库（`--store db`）
 
-### 配置数据库（`--store db`）
-
-`honk-core --store db` 将受管的 `.dae` 源作为修订版本保存在状态数据库 `<data_dir>/state/honk.db` 中。Linux 上 `data_dir` 默认值为 `/var/lib/honk`，Android 上为 `/data/adb/honk`。
+`honk-core --store db` 把受管理的 `.dae` 源以修订形式存进状态数据库 `<data_dir>/state/honk.db`。`data_dir` 取自 `--data-dir`（Linux 默认 `/var/lib/honk`，Android 默认 `/data/adb/honk`），必须与 `global.data_dir` 一致，不会退回工作目录。`state` 目录权限 0700，文件 0600；两者都属于守护进程用户，且不能是符号链接。
 
 启动时，或执行 `honk-core admin reset` 时，如果这两者属于守护进程用户、只是多了组或其他用户的读和执行权限，honk 会去掉这些权限并记一条 warning。其他情况一律拒绝，组或其他用户可以写时也一样。`config export` 和其他离线读取遇到 0700 与 0600 以外的权限时一律拒绝，也不改权限。
 
@@ -1359,7 +1357,7 @@ Global 绑定的是稳定身份：目标消失后，新流量按 fail-closed 处
 
 正常的 no-op 接受也会触发重置，provider 与网络更新则不触发。
 
-`GET /datapath` 和运行时里的数据面摘要都使用后端的程序、挂接、路由和 admission 观测，不按配置的接口去猜。Mock 报告 `disabled` 和 `none`。真实观测是 `partial`，没有验证过的事实保留未知值或 `null`，路由 generation 的身份独立于运行时 generation。已知映射容量不代表知道占用量。hook 只是挂上了，不代表 admission 已经开启，也不声明 `full_transparency`。
+`GET /datapath` 和运行时里的数据面摘要都使用后端的程序、挂接、路由和 admission 观测，不按配置的接口去猜。Mock 报告 `disabled` 和 `none`。真实观测是 `partial`，没有验证过的事实保留未知值或 `null`，路由 generation 的身份独立于运行时 generation。配置了 VPN 服务端绕行时，`vpn_server_bypass` 报告 `{"enabled": bool, "ready": bool, "interface": string|null}`（就绪时为候选接口名，未就绪时为 null；未配置时省略）。已知映射容量不代表知道占用量。hook 只是挂上了，不代表 admission 已经开启，也不声明 `full_transparency`。
 
 `GET /datapath` 返回 `{observed_at,kind,state,visibility,ebpf,errors}`。`kind` 不是 `ebpf` 时 `ebpf` 为 `null`。`detail=full` 增加 `ebpf.attachments` 与 `ebpf.maps`，默认的 `summary` 省略二者。
 
