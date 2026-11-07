@@ -214,7 +214,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 
 完整配置或订阅源正文必须包含顶层 `proxies` 序列。缺少受支持的 `type`、服务器地址、有效非零端口或必需凭据的条目会被跳过。端口可以是整数或数字字符串。JSON 使用原生解码，支持显示名称中的 UTF-16 代理对转义。
 
-接受的 `type` 值包括 `socks5`、`ss`/`shadowsocks`、`trojan`、`vmess`、`vless`、`hysteria2`/`hysteria`、`tuic`、`juicity` 与 `anytls`。无关的客户端元信息会被忽略；不支持的线协议传输、代理插件和相互矛盾的安全设置不会被静默替换。
+接受的 `type` 值包括 `socks5`、`ss`/`shadowsocks`、`trojan`、`vmess`、`vless`、`hysteria2`/`hysteria`、`tuic`、`juicity`、`anytls` 与 `snell`。无关的客户端元信息会被忽略；不支持的线协议传输、代理插件和相互矛盾的安全设置不会被静默替换。
 
 #### 通用代理字段
 
@@ -242,6 +242,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | Hysteria2 | `password`/`auth`，以及 `obfs: salamander` 与 `obfs-password`。支持上传/下载带宽、`ports`/`mport` 跳跃端口范围、`hop-interval`/`mhop`、接收窗口、MTU 与 MTU 发现设置。 |
 | TUIC | UUID/密码、拥塞控制、ALPN、接收窗口、MTU。 |
 | AnyTLS | `idle-session-check-interval`、`idle-session-timeout`、`min-idle-session`。 |
+| Snell | `psk`、整数 `version`（3–6，默认 4）、v6 `mode`、`reuse`（映射为 `snell_reuse`）、`obfs-opts` 的 `mode` http/tls 与 `host`（映射为 `snell_obfs`/`snell_obfs_host`；v6 上拒绝）；`udp` 映射为数据包转发能力（true -> tcp,udp，false -> tcp）。 |
 
 显式关闭的功能块按禁用处理，不会误判为启用未支持功能。原生支持 UDP 的协议接受 `udp: true`；VMess 没有 UDP 路径，该声明会被忽略，节点仍按 TCP 导入。节点模型无法保留显式 UDP 限制时会拒绝导入。
 

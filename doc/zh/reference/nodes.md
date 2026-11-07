@@ -141,6 +141,12 @@ Node 模型包含下列字段。分享链接从协议方案、用户信息、地
 | `anytls_min_idle_session` | usize? | null | 来自 `min_idle_session` 的空闲会话目标下限；有效默认值 0，受八条会话的池上限约束 |
 | `anytls_idle_session_check_interval` | u64? | null | 解析后的 `idle_session_check_interval` 秒数；当前运行时 janitor 周期仍固定为 30 秒 |
 | `anytls_idle_session_timeout` | u64? | null | 来自 `idle_session_timeout` 的空闲驱逐；有效默认值 30 秒 |
+| `snell_psk` | string? | null | Snell 预共享密钥；`password` 的扁平别名 |
+| `snell_version` | u8? | null | Snell 协议版本 3–6；有效默认值 4（v5 使用 v4 TCP 线格式）。支持通过 TCP 进行 UDP 转发；`network` 如 AnyTLS 一样控制 UDP 能力 |
+| `snell_mode` | string? | null | Snell v6 记录分帧 `default`、`unshaped` 或 `unsafe-raw`；仅在版本 6 时有效，有效默认值 `default` |
+| `snell_reuse` | bool? | null | 针对 TCP 的 CommandConnectV2 连接复用，仅限 v4+；每个节点保留空闲连接（最多 10 个，空闲 15 秒，v6 为 60 秒）；UDP 始终使用新建连接 |
+| `snell_obfs` | string? | null | simple-obfs 模式 `http` 或 `tls`，包装 TCP 连接（TCP、UDP 与复用连接）；仅限 v3–v5。Surge 官方 `snell-server` 不接受 honk 及其他开源客户端（mihomo、opensnell）的 `tls` 模式，请改用 `http` |
+| `snell_obfs_host` | string? | null | obfs 的 HTTP `Host` 头或 TLS SNI；须同时设置 `snell_obfs`；默认使用服务器地址 |
 | `mark` | u32? | null | 结构化模型中的出站 `SO_MARK`；不是 dae 分享链接查询参数 |
 | `tags` | string[] | `[]` | 分类元数据；不是 dae 分享链接查询参数 |
 | `subscription_id` / `group_id` | UUID? | null | 导入/运行时归属元数据 |
@@ -166,6 +172,7 @@ VLESS 扁平输入已移除 `vless_mode`。只要原始输入中出现该字段�
 | TUIC | `tuic_uuid` / `username`；`tuic_password` / `password` |
 | Juicity | `juicity_uuid` / `username`；`juicity_password` / `password` |
 | AnyTLS | `password` / `anytls_password` |
+| Snell | `password` / `snell_psk` |
 
 缺失或 null 表示未提供。已提供的字符串须逐字节一致，空字符串和首尾空格也参与比较。空凭据仍须满足对应协议的要求。扁平凭据字段仍须使用字符串；数字转换仅适用于订阅导入。
 

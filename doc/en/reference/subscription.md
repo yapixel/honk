@@ -214,7 +214,7 @@ Blank lines, comments, and Shadowrocket `REMARKS=` / `STATUS=` metadata lines ar
 
 A full profile or provider payload must contain a top-level `proxies` sequence. Entries without a supported `type`, server address, valid nonzero port, or required credentials are skipped. Ports may be integers or numeric strings. JSON is decoded natively, including UTF-16 surrogate-pair escapes in display names.
 
-Accepted `type` values are `socks5`, `ss`/`shadowsocks`, `trojan`, `vmess`, `vless`, `hysteria2`/`hysteria`, `tuic`, `juicity`, and `anytls`. Unrelated client metadata is ignored; unsupported wire transports, proxy plugins, and contradictory security settings are not silently reinterpreted.
+Accepted `type` values are `socks5`, `ss`/`shadowsocks`, `trojan`, `vmess`, `vless`, `hysteria2`/`hysteria`, `tuic`, `juicity`, `anytls`, and `snell`. Unrelated client metadata is ignored; unsupported wire transports, proxy plugins, and contradictory security settings are not silently reinterpreted.
 
 #### Common proxy fields
 
@@ -242,6 +242,7 @@ Supported spelling aliases normalize before node identity is derived.
 | Hysteria2 | `password`/`auth`; `obfs: salamander` with `obfs-password`; upload/download bandwidth; `ports`/`mport` hopping ranges; `hop-interval`/`mhop`; receive windows; MTU and MTU-discovery settings. |
 | TUIC | UUID/password, congestion control, ALPN, receive windows, MTU. |
 | AnyTLS | `idle-session-check-interval`, `idle-session-timeout`, `min-idle-session`. |
+| Snell | `psk`, integer `version` (3–6, default 4), v6 `mode`, `reuse` (maps to `snell_reuse`), `obfs-opts` `mode` http/tls and `host` (map to `snell_obfs`/`snell_obfs_host`; rejected on v6); `udp` maps to packet capability (true -> tcp,udp, false -> tcp). |
 
 Explicit disabled feature blocks are treated as disabled, not as unsupported active features. `udp: true` is accepted for intrinsically UDP-capable protocols, and ignored on VMess, which has no UDP path, so the node still imports for TCP. An explicit UDP restriction is rejected where the node model cannot preserve it.
 

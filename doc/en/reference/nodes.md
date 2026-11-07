@@ -141,6 +141,12 @@ The Node model exposes the fields below. Share links populate operator-facing fi
 | `anytls_min_idle_session` | usize? | null | Requested idle-session floor from `min_idle_session`; effective default 0, bounded by the eight-session pool cap |
 | `anytls_idle_session_check_interval` | u64? | null | Parsed `idle_session_check_interval` seconds; current runtime janitor cadence remains fixed at 30 s |
 | `anytls_idle_session_timeout` | u64? | null | Idle eviction from `idle_session_timeout`; effective default 30 s |
+| `snell_psk` | string? | null | Snell pre-shared key; flat alias of `password` |
+| `snell_version` | u8? | null | Snell protocol version 3–6; effective default 4 (v5 uses the v4 TCP wire). UDP is supported over TCP; `network` gates UDP like AnyTLS |
+| `snell_mode` | string? | null | Snell v6 record framing `default`, `unshaped` or `unsafe-raw`; only valid with version 6, effective default `default` |
+| `snell_reuse` | bool? | null | CommandConnectV2 connection reuse for TCP, v4+ only; idle connections kept per node (max 10, 15 s idle, 60 s for v6); UDP always uses a fresh connection |
+| `snell_obfs` | string? | null | simple-obfs mode `http` or `tls` wrapping the TCP connection (TCP, UDP and reused connections); v3–v5 only. Surge's official `snell-server` rejects `tls` from honk and from other open-source clients (mihomo, opensnell); use `http` with it |
+| `snell_obfs_host` | string? | null | obfs HTTP `Host` header or TLS SNI; requires `snell_obfs`; default the server address |
 | `mark` | u32? | null | Structured-model outbound `SO_MARK`; not a dae share-link query |
 | `tags` | string[] | `[]` | Classification metadata; not a dae share-link query |
 | `subscription_id` / `group_id` | UUID? | null | Import/runtime ownership metadata |
@@ -166,6 +172,7 @@ Flat credential aliases are compared before incompatible fields are stripped:
 | TUIC | `tuic_uuid` / `username`; `tuic_password` / `password` |
 | Juicity | `juicity_uuid` / `username`; `juicity_password` / `password` |
 | AnyTLS | `password` / `anytls_password` |
+| Snell | `password` / `snell_psk` |
 
 Missing or null claims are absent. Supplied strings must agree byte for byte, including empty strings and surrounding spaces. An empty credential remains subject to its protocol's requirements. Flat credential fields remain strings; numeric coercion applies only to subscription feeds.
 
