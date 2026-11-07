@@ -88,6 +88,7 @@ honk 可配合以下两类网页界面使用：
 - [sing-box](https://github.com/SagerNet/sing-box)：出站组与 Clash API 模式
 - [daeuniverse/outbound](https://github.com/daeuniverse/outbound)：协议参考
 - [juicity-rs](https://github.com/juicity/juicity-rs)（Markson Pigeonzilla Plus）：Juicity 协议参考、wire 格式对齐及真实互通测试
+- [meow-rs](https://github.com/meow-rs/meow-rs)（MIT）：Snell 编解码与 simple-obfs 客户端移植至 `honk-outbound/src/proxy/snell/`（见[第三方声明](#第三方声明)）
 - [aya-rs](https://github.com/aya-rs/aya)：Rust eBPF
 
 ## 许可证
@@ -97,6 +98,20 @@ honk 可配合以下两类网页界面使用：
 ```text
 SPDX-License-Identifier: GPL-3.0-only
 Copyright (c) 2025, glassyiris <honk@catmint.cc> and honk contributors
+```
+
+### 第三方声明
+
+`crates/honk-outbound/src/proxy/snell/` 中的 Snell 编解码与 simple-obfs 客户端移植自 [meow-rs](https://github.com/meow-rs/meow-rs)，其 Snell 客户端源自 [opensnell](https://github.com/missuo/opensnell)（GPL-3.0）。meow-rs 依以下许可证分发：
+
+```text
+Copyright (c) 2026 Max Lv
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 仅用于开发的 [dae 解析器 oracle](tools/dae-parse/README.md)链接了 dae（AGPL-3.0-only）。它不随发布物分发，也不链接进 `honk-core`。

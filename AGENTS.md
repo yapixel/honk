@@ -248,6 +248,7 @@ Behaviour that looks like a defect but is deliberate. Reviewers skip these unles
 Configuration contracts (settings, dialect, `honk-tool`): `.agents/rules/configuration.md`. Deployment and security-sensitive paths: `.agents/rules/deployment.md`, `.agents/rules/security.md`.
 
 - Choose commands for the owning crate: workspace `cargo` skips `honk-ebpf`, which has separate `Cargo.lock` and nightly-only target.
+
 - Before behavior changes, read `doc/en/design/overview.md` and subsystem siblings in `doc/en/design/`, plus config guide/reference `doc/en/configuration.md` / `doc/en/reference/`. Update both `doc/en/` and `doc/zh/` for behavior changes.
 - If you add or remove workspace crates, update this file and the root `Cargo.toml` `[workspace] members` list.
 - README authorship disclosure: the maintainer focuses on eBPF; most userspace subsystems were largely AI-authored with partial review. Review userspace changes accordingly.

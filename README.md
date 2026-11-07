@@ -88,6 +88,7 @@ For vulnerabilities, follow [SECURITY.md](.github/SECURITY.md).
 - [sing-box](https://github.com/SagerNet/sing-box): outbound group and Clash API patterns
 - [daeuniverse/outbound](https://github.com/daeuniverse/outbound): protocol reference
 - [juicity-rs](https://github.com/juicity/juicity-rs) by Markson Pigeonzilla Plus: Juicity protocol reference, wire-format alignment, and live interop testing
+- [meow-rs](https://github.com/meow-rs/meow-rs) (MIT): Snell codecs and simple-obfs client ported into `honk-outbound/src/proxy/snell/` (see [Third-party notices](#third-party-notices))
 - [aya-rs](https://github.com/aya-rs/aya): Rust eBPF
 
 ## License
@@ -97,6 +98,20 @@ For vulnerabilities, follow [SECURITY.md](.github/SECURITY.md).
 ```text
 SPDX-License-Identifier: GPL-3.0-only
 Copyright (c) 2025, glassyiris <honk@catmint.cc> and honk contributors
+```
+
+### Third-party notices
+
+The Snell codecs and simple-obfs client in `crates/honk-outbound/src/proxy/snell/` are ported from [meow-rs](https://github.com/meow-rs/meow-rs), whose Snell client is itself derived from [opensnell](https://github.com/missuo/opensnell) (GPL-3.0). meow-rs is distributed under the following license:
+
+```text
+Copyright (c) 2026 Max Lv
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 The development-only [dae parser oracle](tools/dae-parse/README.md) links dae (AGPL-3.0-only). It is never shipped or linked into `honk-core`.

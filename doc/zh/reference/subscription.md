@@ -141,9 +141,13 @@ URL 带引号时，紧贴结束引号或完整 `(UA)` 后缀的 `#` 会被当作
 
 | 属性 | 当前行为 |
 | --- | --- |
-| 属性 | 当前行为 |
-| --- | --- |
 | 位置 | 状态数据库 `<data_dir>/state/honk.db` 里的 `subscription_body` 表。文件权限 0600，目录 0700，见 [API 参考](./api.md#配置数据库--store-db)。`data_dir` 在 Linux 上默认是 `/var/lib/honk`，在 Android 上是 `/data/adb/honk`。 |
+| Key | 对带长度边界的 URL、配置里的 user agent 覆盖值，以及有序的 header key/value 对计算 SHA-256，再用 URL-safe Base64 编码并加上 `.sub`。user agent 覆盖值未设置或为空时，按空值参与计算。版本化的默认请求 UA 不参与计算，所以默认订阅升级后仍能沿用已存正文。请求身份不会以明文暴露。 |
+| 写入边界 | HTTP 请求成功且正文通过导入校验后，honk 在一个事务里保存完整的原始响应，被拒绝的条目也算在内。 |
+| 容量限制 | 单个正文最多 8 MiB，全部正文合计最多 32 MiB。写入会让总量超过 32 MiB 时，honk 先删除已停用订阅的正文；仍然超出就拒绝写入，保留原正文，并在本次拉取中报告 `subscription-store-write-failed`。订阅连续两次维护都没启用时，honk 删掉它的正文；维护每 60 秒一次。启动时 `store_subscribe: false`，但因 `cache_file`、`password_auth` 或 `--store db` 仍打开了状态数据库时，honk 会清空该表。 |
+| 从 `.sub` 升级 | 取得实例锁后，honk 导入符合条件的旧正文，步骤见下文。 |
+| 重定向 | 最多 5 跳。从 `https` 重定向到其他 scheme，本次拉取失败。重定向到 loopback、私有、链路本地或未指定的字面地址，也同样失败，除非配置的 URL 自己就用了该地址。解析到这类地址的主机名不在检查范围内。 |
+| 正文大小 | 最多 8 MiB，在读取过程中判定，不等整个正文缓冲完。 |
 
 启动时，honk 取得实例锁，然后按下面的步骤导入旧 `.sub` 存储：
 
@@ -258,7 +262,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 
 完整配置或 provider 正文必须包含顶层 `proxies` 序列。缺少受支持的 `type`、服务器地址、有效非零端口或必需凭据的条目，honk 会跳过。端口可以是整数，也可以是数字字符串。JSON 用原生解码，支持显示名称里的 UTF-16 代理对转义。
 
-可接受的 `type` 有 `socks5`、`ss`/`shadowsocks`、`trojan`、`vmess`、`vless`、`hysteria2`/`hysteria`、`tuic`、`juicity` 和 `anytls`。无关的客户端元信息，honk 会忽略；不支持的线协议传输、代理插件，以及相互矛盾的安全设置，也不会被悄悄替换。
+可接受的 `type` 有 `socks5`、`ss`/`shadowsocks`、`trojan`、`vmess`、`vless`、`hysteria2`/`hysteria`、`tuic`、`juicity`、`anytls` 和 `snell`。无关的客户端元信息，honk 会忽略；不支持的线协议传输、代理插件，以及相互矛盾的安全设置，也不会被悄悄替换。
 
 #### 通用代理字段
 
@@ -287,6 +291,7 @@ vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls#edge
 | Hysteria2 | `password`/`auth`，以及 `obfs: salamander` 与 `obfs-password`。支持上传/下载带宽、`ports`/`mport` 跳跃端口范围、`hop-interval`/`mhop`、接收窗口、MTU 与 MTU 发现设置。 |
 | TUIC | UUID/密码、拥塞控制、ALPN、接收窗口、MTU。 |
 | AnyTLS | `idle-session-check-interval`、`idle-session-timeout`、`min-idle-session`。 |
+| Snell | `psk`、整数 `version`（3–6，默认 4）、v6 `mode`、`reuse`（映射为 `snell_reuse`）、`obfs-opts` 的 `mode` http/tls 与 `host`（映射为 `snell_obfs`/`snell_obfs_host`；v6 上拒绝）；`udp` 映射为数据包转发能力（true -> tcp,udp，false -> tcp）。 |
 
 显式关闭的 feature block 按禁用处理，honk 不会把它当成已启用的不支持的 feature。原生支持 UDP 的协议接受 `udp: true`；VMess 没有 UDP 路径，honk 忽略这个声明，节点仍按 TCP 导入。节点模型保留不了显式 UDP 限制时，honk 拒绝导入。
 

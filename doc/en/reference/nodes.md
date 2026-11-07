@@ -312,6 +312,7 @@ Identity is stable across rename, reload, and subscription refresh when the dial
 | --- | --- | --- | --- | --- |
 | `ss` | `shadowsocks` in Clash and sing-box `type` only | Yes | Yes | AEAD and Shadowsocks 2022 |
 | `trojan` | — | Yes | Yes* | TLS; TCP/WS/gRPC/XHTTP transport |
+| `snell` | `snell` in Clash subscriptions | Yes | Yes* | Snell v3–v6; optional simple-obfs, TCP reuse in v4+ |
 | `vmess` | — | Yes | No | AEAD; TCP/WS/gRPC/XHTTP and REALITY; handler requires `rprx` |
 | `vless` | — | Yes | Configurable* | Native UDP, UoT v2, H2MUX, XUDP, Mux.Cool, Encryption, REALITY, and Vision; handler requires `rprx` |
 | `socks5` | — | Yes | Yes | CONNECT and UDP ASSOCIATE |
@@ -647,6 +648,28 @@ Durations are whole seconds, bare or with an `s`, `m` or `h` suffix. `ms` values
 node {
     anytls: 'anytls://secret@edge.example:443?sni=edge.example&min_idle_session=1&idle_session_timeout=1m#anytls'
 }
+```
+
+### Snell
+
+Snell has no share-link scheme, so it cannot be written as a share link in a dae `node {}` block. Snell nodes come from Clash subscriptions (`type: snell`).
+
+| Clash field | Node field / behavior |
+| --- | --- |
+| `psk` | `password` and `snell_psk` |
+| `version` | `snell_version`; integer 3–6, default 4 |
+| `reuse` | `snell_reuse`; boolean, CommandConnectV2 TCP connection reuse (v4+) |
+| `obfs-opts` | `snell_obfs` (`http` or `tls`) and `snell_obfs_host`; v3–v5 only |
+
+```yaml
+# Clash subscription item
+- name: snell-node
+  type: snell
+  server: snell.example.com
+  port: 443
+  psk: mysecret
+  version: 4
+  reuse: true
 ```
 
 ## VLESS

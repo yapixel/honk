@@ -135,9 +135,8 @@ Body parser selection:
 
 | Property | Current behavior |
 | --- | --- |
-| Property | Current behavior |
-| --- | --- |
 | Location | The `subscription_body` table of the state db, `<data_dir>/state/honk.db`. The file is 0600 in a 0700 directory. See the [API reference](./api.md#configuration-db---store-db). The default `data_dir` is `/var/lib/honk` on Linux and `/data/adb/honk` on Android. |
+| Key | URL-safe Base64 of a SHA-256 hash plus `.sub`. The hash covers the length-delimited URL, the configured user-agent override (empty when unset or empty), and the ordered header key/value pairs. The versioned default request UA is intentionally not part of the key, so default subscriptions retain their body across upgrades. The request identity is not exposed in plaintext. |
 | Write boundary | After HTTP success and body acceptance, the complete raw response, including rejected entries, is written in one transaction. |
 | Limits | Each body is at most 8 MiB, and all bodies together at most 32 MiB. A write that would pass 32 MiB first deletes bodies of subscriptions that are no longer enabled. If that is not enough, the write is refused, the previous body stays, and the fetch reports `subscription-store-write-failed`. A body whose subscription is not enabled at two consecutive maintenance ticks (every 60 seconds) is deleted. A start with `store_subscribe: false` empties the table even when `cache_file`, `password_auth` or `--store db` still opens the state db. |
 | Upgrade from `.sub` | Import eligible legacy bodies after acquiring the instance lock, as described below. |
@@ -256,7 +255,7 @@ Blank lines, comments, and Shadowrocket `REMARKS=` / `STATUS=` metadata lines ar
 
 A full profile or provider payload must contain a top-level `proxies` sequence. Entries without a supported `type`, server address, valid nonzero port, or required credentials are skipped. Ports may be integers or numeric strings. JSON is decoded natively, including UTF-16 surrogate-pair escapes in display names.
 
-Accepted `type` values are `socks5`, `ss`/`shadowsocks`, `trojan`, `vmess`, `vless`, `hysteria2`/`hysteria`, `tuic`, `juicity`, and `anytls`. Unrelated client metadata is ignored. Unsupported wire transports, proxy plugins, and contradictory security settings are not silently reinterpreted.
+Accepted `type` values are `socks5`, `ss`/`shadowsocks`, `trojan`, `vmess`, `vless`, `hysteria2`/`hysteria`, `tuic`, `juicity`, `anytls`, and `snell`. Unrelated client metadata is ignored. Unsupported wire transports, proxy plugins, and contradictory security settings are not silently reinterpreted.
 
 #### Common proxy fields
 
@@ -285,6 +284,7 @@ Supported spelling aliases normalize before node identity is derived.
 | Hysteria2 | `password`/`auth`; `obfs: salamander` with `obfs-password`; upload/download bandwidth; `ports`/`mport` hopping ranges; `hop-interval`/`mhop`; receive windows; MTU and MTU-discovery settings. |
 | TUIC | UUID/password, congestion control, ALPN, receive windows, MTU. |
 | AnyTLS | `idle-session-check-interval`, `idle-session-timeout`, `min-idle-session`. |
+| Snell | `psk`, integer `version` (3–6, default 4), v6 `mode`, `reuse` (maps to `snell_reuse`), `obfs-opts` `mode` http/tls and `host` (map to `snell_obfs`/`snell_obfs_host`; rejected on v6); `udp` maps to packet capability (true -> tcp,udp, false -> tcp). |
 
 Explicit disabled feature blocks are treated as disabled, not as unsupported active features. `udp: true` is accepted for intrinsically UDP-capable protocols, and ignored on VMess, which has no UDP path, so the node still imports for TCP. An explicit UDP restriction is rejected where the node model cannot preserve it.
 

@@ -64,10 +64,18 @@ Node 模型包含下列字段。分享链接会从协议方案、userinfo、地�
 | `anytls_min_idle_session` | usize? | `null` | 来自 `min_idle_session` 的空闲 session 目标下限；有效默认值 `0`，受八条 session 的池上限约束。 |
 | `anytls_idle_session_check_interval` | u64? | `null` | 解析后的 `idle_session_check_interval` 秒数；当前运行时 janitor 周期仍固定为 30 秒。 |
 | `anytls_idle_session_timeout` | u64? | `null` | 来自 `idle_session_timeout` 的空闲驱逐；有效默认值 30 秒。 |
+| `snell_psk` | string? | `null` | Snell 预共享密钥；`password` 的扁平别名。 |
+| `snell_version` | u8? | `null` | Snell 协议版本 3–6；有效默认值 4（v5 使用 v4 TCP 线格式）。支持通过 TCP 进行 UDP 转发；`network` 如 AnyTLS 一样控制 UDP 能力。 |
+| `snell_mode` | string? | `null` | Snell v6 记录分帧 `default`、`unshaped` 或 `unsafe-raw`；仅在版本 6 时有效，有效默认值 `default`。 |
+| `snell_reuse` | bool? | `null` | 针对 TCP 的 CommandConnectV2 连接复用，仅限 v4+；每个节点保留空闲连接（最多 10 个，空闲 15 秒，v6 为 60 秒）；UDP 始终使用新建连接。 |
+| `snell_obfs` | string? | `null` | simple-obfs 模式 `http` 或 `tls`，包装 TCP 连接（TCP、UDP 与复用连接）；仅限 v3–v5。Surge 官方 `snell-server` 不接受 honk 及其他开源客户端（mihomo、opensnell）的 `tls` 模式，请改用 `http`。 |
+| `snell_obfs_host` | string? | `null` | obfs 的 HTTP `Host` 头或 TLS SNI；须同时设置 `snell_obfs`；默认使用服务器地址。 |
 | `mark` | u32? | `null` | 结构化模型中的出站 `SO_MARK`；不是 dae 分享链接查询参数。 |
 | `tags` | string[] | `[]` | 分类元数据；不是 dae 分享链接查询参数。 |
 | `subscription_id` / `group_id` | UUID? | `null` | 导入与运行时归属元数据。 |
 | `created_at` / `updated_at` | datetime | 当前时间 | 运行时元数据。 |
+
+Snell 没有分享链接 scheme，因此无法在 dae `node {}` 块中写为分享链接；Snell 节点来自 Clash 订阅（`type: snell`）。
 
 节点自身校验要求非空名称、有效主机和显式非零 `port`。`address` 不会补充缺失的端口；仅提供 IPv6 地址时须显式设置 `host`。只有身份与注入规则完全一致的 `direct`/`block` 内置节点可省略 endpoint。
 
@@ -189,6 +197,7 @@ VLESS 扁平输入已删除 `vless_mode`，改用 `network` 表示数据包权�
 | TUIC | `tuic_uuid` / `username`；`tuic_password` / `password` |
 | Juicity | `juicity_uuid` / `username`；`juicity_password` / `password` |
 | AnyTLS | `password` / `anytls_password` |
+| Snell | `password` / `snell_psk` |
 
 缺失或 null 表示未提供。已提供的字符串须逐字节一致，空字符串和首尾空格也参与比较。空凭据仍须满足对应协议的要求。扁平凭据字段仍须使用字符串；数字转换仅适用于订阅导入。
 
@@ -312,6 +321,7 @@ Auto、native、XUDP、Mux.Cool 与关闭 UDP 的节点 ID 不变。直接选择
 | --- | --- | --- | --- | --- |
 | `ss` | `shadowsocks`，仅限 Clash 与 sing-box `type` | 是 | 是 | AEAD 与 Shadowsocks 2022 |
 | `trojan` | — | 是 | 是* | TLS；TCP/WS/gRPC/XHTTP 传输 |
+| `snell` | Clash 订阅中的 `snell` | 是 | 是* | Snell v3–v6；可选 simple-obfs，v4+ 支持 TCP 连接复用 |
 | `vmess` | — | 是 | 否 | AEAD；TCP/WS/gRPC/XHTTP 与 REALITY；handler 需要 `rprx` |
 | `vless` | — | 是 | 可配置* | 原生 UDP、UoT v2、H2MUX、XUDP、Mux.Cool、Encryption、REALITY 与 Vision；handler 需要 `rprx` |
 | `socks5` | — | 是 | 是 | CONNECT 与 UDP ASSOCIATE |
@@ -633,6 +643,28 @@ node {
 node {
     anytls: 'anytls://secret@edge.example:443?sni=edge.example&min_idle_session=1&idle_session_timeout=1m#anytls'
 }
+```
+
+### Snell
+
+Snell 没有分享链接 scheme，因此无法在 dae `node {}` 块中写为分享链接。Snell 节点来自 Clash 订阅（`type: snell`）。
+
+| Clash 字段 | 节点字段 / 行为 |
+| --- | --- |
+| `psk` | `password` 与 `snell_psk` |
+| `version` | `snell_version`；整数 3–6，默认 4 |
+| `reuse` | `snell_reuse`；布尔值，针对 TCP 的 CommandConnectV2 连接复用（v4+） |
+| `obfs-opts` | `snell_obfs`（`http` 或 `tls`）与 `snell_obfs_host`；仅限 v3–v5 |
+
+```yaml
+# Clash 订阅条目
+- name: snell-node
+  type: snell
+  server: snell.example.com
+  port: 443
+  psk: mysecret
+  version: 4
+  reuse: true
 ```
 
 ## VLESS
