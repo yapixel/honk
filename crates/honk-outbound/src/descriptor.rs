@@ -87,6 +87,10 @@ fn vless_pool_bare_tcp(node: &Node) -> bool {
     stream_pool_bare_tcp(node) && node.vless().unwrap().tcp_path() == VlessTcpPath::Direct
 }
 
+fn snell_pool_bare_tcp(node: &Node) -> bool {
+    node.snell().and_then(|config| config.reuse) != Some(true)
+}
+
 /// Poolable only on the plain TCP transport: `dial()` completes the TLS
 /// handshake (if enabled) and writes the one-shot request header; Trojan
 /// defines no server handshake reply, so the stream is then a target-bound
@@ -189,6 +193,15 @@ static DESCRIPTORS: &[ProtocolDescriptor] = &[
         generation_runtime: GenerationRuntime::AnyTls,
         share_link_schemes: &["anytls"],
     },
+    ProtocolDescriptor {
+        protocol: NodeProtocol::Snell,
+        supports_udp: network_allows_udp,
+        pool_ready_streams: never,
+        pool_bare_tcp: snell_pool_bare_tcp,
+        supports_warm: no_warm,
+        generation_runtime: GenerationRuntime::Snell,
+        share_link_schemes: &[],
+    },
     // Each direct flow owns a socket carrying its own rule or global mark; a
     // pooled socket would hand one flow another flow's mark.
     ProtocolDescriptor {
@@ -240,6 +253,7 @@ mod tests {
             NodeProtocol::Tuic,
             NodeProtocol::Juicity,
             NodeProtocol::AnyTLS,
+            NodeProtocol::Snell,
             NodeProtocol::Direct,
             NodeProtocol::Block,
         ] {
@@ -366,6 +380,24 @@ mod tests {
         let ss = descriptor(NodeProtocol::SS).supports_udp;
         let node = Node::default();
         assert!(ss(&node), "SS UDP is not network-gated");
+
+        let snell = descriptor(NodeProtocol::Snell).supports_udp;
+        let snell_tcp_only = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                network: Some("tcp".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!snell(&snell_tcp_only));
+        let snell_udp = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                network: Some("tcp,udp".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(snell(&snell_udp));
     }
 
     #[test]
@@ -393,5 +425,37 @@ mod tests {
         *udp443 = Udp443Policy::Allow;
         assert!(udp_target_allowed(&node, 443));
         assert!(udp_target_allowed(&Node::default(), 443));
+    }
+
+    #[test]
+    fn snell_pool_bare_tcp_respects_reuse_setting() {
+        let descriptor = descriptor(NodeProtocol::Snell);
+        let node_reuse_disabled = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                reuse: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!((descriptor.pool_bare_tcp)(&node_reuse_disabled));
+
+        let node_reuse_default = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                reuse: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!((descriptor.pool_bare_tcp)(&node_reuse_default));
+
+        let node_reuse_enabled = Node {
+            outbound: honk_config::node::OutboundConfig::Snell(honk_config::node::SnellConfig {
+                reuse: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!(descriptor.pool_bare_tcp)(&node_reuse_enabled));
+        assert_eq!(descriptor.generation_runtime, GenerationRuntime::Snell);
     }
 }

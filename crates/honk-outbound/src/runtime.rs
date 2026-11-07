@@ -54,6 +54,7 @@ pub enum GenerationRuntime {
     AnyTls,
     Vless,
     Quic,
+    Snell,
 }
 
 impl GenerationRuntime {
@@ -76,6 +77,7 @@ impl GenerationRuntime {
                 ProtocolRuntime::None
             }
             Self::Quic => ProtocolRuntime::Quic(QuicRuntime::new(metrics_enabled, quality)),
+            Self::Snell => ProtocolRuntime::Snell(SnellRuntime::new(node)),
         }
     }
 }
@@ -94,6 +96,26 @@ pub enum ProtocolRuntime {
     /// Type-erased TUIC, Juicity, or Hysteria2 client slot. Policy warm
     /// ownership may release the cached client before generation retirement.
     Quic(QuicRuntime),
+    /// Node-local Snell connection reuse pool.
+    Snell(SnellRuntime),
+}
+
+#[derive(Debug, Clone)]
+pub struct SnellRuntime {
+    pub pool: Arc<crate::proxy::snell::pool::SnellPool>,
+}
+
+impl SnellRuntime {
+    pub fn new(node: &Node) -> Self {
+        let version = node.snell().and_then(|c| c.version).unwrap_or(4);
+        let max_age = if version == 6 {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(15)
+        };
+        let pool = Arc::new(crate::proxy::snell::pool::SnellPool::new(10, max_age));
+        Self { pool }
+    }
 }
 
 /// A protocol client stored in [`QuicRuntime`]. Implemented by the
@@ -499,6 +521,13 @@ impl NodeRuntime {
         false
     }
 
+    pub fn snell_pool(&self) -> Option<Arc<crate::proxy::snell::pool::SnellPool>> {
+        let ProtocolRuntime::Snell(runtime) = &self.runtime else {
+            return None;
+        };
+        Some(Arc::clone(&runtime.pool))
+    }
+
     pub(crate) fn anytls_pool(&self) -> anyhow::Result<Arc<crate::proxy::anytls::AnyTlsPool>> {
         let ProtocolRuntime::AnyTls(runtime) = &self.runtime else {
             anyhow::bail!("node '{}' has no AnyTLS runtime", self.node.name);
@@ -628,7 +657,10 @@ impl NodeRuntime {
     pub(crate) fn tls_connector_loaded(&self) -> bool {
         match &self.runtime {
             ProtocolRuntime::AnyTls(runtime) => runtime.tls.is_loaded(),
-            ProtocolRuntime::None | ProtocolRuntime::Vless(_) | ProtocolRuntime::Quic(_) => false,
+            ProtocolRuntime::None
+            | ProtocolRuntime::Vless(_)
+            | ProtocolRuntime::Quic(_)
+            | ProtocolRuntime::Snell(_) => false,
         }
     }
 }

@@ -180,6 +180,58 @@ impl Node {
                 }
                 return self.validate_protocol_inner();
             }
+            OutboundConfig::Snell(config) => {
+                let psk = config.psk.as_deref().unwrap_or("");
+                if psk.trim().is_empty() {
+                    return Err(invalid(Some("snell_psk"), "snell: psk is required"));
+                }
+                if let Some(v) = config.version
+                    && !(3..=6).contains(&v)
+                {
+                    return Err(invalid(
+                        Some("snell_version"),
+                        "snell: version must be 3, 4, 5, or 6",
+                    ));
+                }
+                if config.mode.is_some() && config.version != Some(6) {
+                    return Err(invalid(
+                        Some("snell_mode"),
+                        "snell: mode is only supported with version 6",
+                    ));
+                }
+                if config.version.unwrap_or(4) == 3 && config.reuse == Some(true) {
+                    return Err(invalid(
+                        Some("snell_reuse"),
+                        "snell: connection reuse requires version 4 or later",
+                    ));
+                }
+                if let Some(obfs) = &config.obfs {
+                    if !matches!(obfs.as_str(), "http" | "tls") {
+                        return Err(invalid(
+                            Some("snell_obfs"),
+                            "snell: obfs mode must be http or tls",
+                        ));
+                    }
+                    if config.version.unwrap_or(4) == 6 {
+                        return Err(invalid(
+                            Some("snell_obfs"),
+                            "snell: obfs is not supported by snell v6",
+                        ));
+                    }
+                }
+                if config.obfs_host.is_some() && config.obfs.is_none() {
+                    return Err(invalid(
+                        Some("snell_obfs_host"),
+                        "snell: obfs_host requires obfs",
+                    ));
+                }
+                if let Some(host) = &config.obfs_host
+                    && !super::is_valid_obfs_host(host)
+                {
+                    return Err(invalid(Some("snell_obfs_host"), "snell: invalid obfs host"));
+                }
+                return self.validate_protocol_inner();
+            }
             _ => return self.validate_protocol_inner(),
         };
         let uuid = uuid.ok_or_else(|| invalid(None, "protocol requires a valid UUID"))?;

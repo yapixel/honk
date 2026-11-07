@@ -14,8 +14,8 @@ use crate::types::NodeProtocol;
 
 use super::{
     AnyTlsConfig, Hysteria2Config, JuicityConfig, Node, OutboundConfig, QuicOptions,
-    ShadowsocksConfig, Socks5Config, StreamTransportOptions, TlsOptions, TrojanConfig, TuicConfig,
-    VlessConfig, VlessMultiplex, VlessUdpEncoding, VmessConfig,
+    ShadowsocksConfig, SnellConfig, Socks5Config, StreamTransportOptions, TlsOptions, TrojanConfig,
+    TuicConfig, VlessConfig, VlessMultiplex, VlessUdpEncoding, VmessConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -181,6 +181,18 @@ struct FlatNode {
     #[serde(default)]
     anytls_idle_session_timeout: Option<u64>,
     #[serde(default)]
+    snell_psk: Option<String>,
+    #[serde(default)]
+    snell_version: Option<u8>,
+    #[serde(default)]
+    snell_mode: Option<String>,
+    #[serde(default)]
+    snell_reuse: Option<bool>,
+    #[serde(default)]
+    snell_obfs: Option<String>,
+    #[serde(default)]
+    snell_obfs_host: Option<String>,
+    #[serde(default)]
     mark: Option<u32>,
     #[serde(default)]
     tags: Vec<String>,
@@ -239,6 +251,9 @@ impl FlatNode {
                     self.password.take(),
                 )?;
             }
+            NodeProtocol::Snell => {
+                self.snell_psk = resolve("snell_psk", self.snell_psk.take(), self.password.take())?;
+            }
             _ => {}
         }
         Ok(())
@@ -292,6 +307,15 @@ impl FlatNode {
                         .is_none_or(str::is_empty) =>
                 {
                     Some("password/anytls_password")
+                }
+                NodeProtocol::Snell
+                    if self
+                        .password
+                        .as_deref()
+                        .or(self.snell_psk.as_deref())
+                        .is_none_or(str::is_empty) =>
+                {
+                    Some("password/snell_psk")
                 }
                 _ => None,
             }
@@ -393,6 +417,7 @@ impl FlatNode {
                         | NodeProtocol::VMess
                         | NodeProtocol::VLess
                         | NodeProtocol::AnyTLS
+                        | NodeProtocol::Snell
                 ),
             network
         );
@@ -463,6 +488,14 @@ impl FlatNode {
             self.anytls_idle_session_timeout.is_some() && !anytls,
             anytls_idle_session_timeout
         );
+
+        let snell = self.protocol == NodeProtocol::Snell;
+        strip!(self.snell_psk.is_some() && !snell, snell_psk);
+        strip!(self.snell_version.is_some() && !snell, snell_version);
+        strip!(self.snell_mode.is_some() && !snell, snell_mode);
+        strip!(self.snell_reuse.is_some() && !snell, snell_reuse);
+        strip!(self.snell_obfs.is_some() && !snell, snell_obfs);
+        strip!(self.snell_obfs_host.is_some() && !snell, snell_obfs_host);
 
         if !dropped.is_empty() {
             diagnostics.push(DetailedDiagnostic::warning(
@@ -679,6 +712,15 @@ impl FlatNode {
                     tls,
                 })
             }
+            NodeProtocol::Snell => OutboundConfig::Snell(SnellConfig {
+                psk: flat.snell_psk.take(),
+                version: flat.snell_version,
+                mode: flat.snell_mode.take(),
+                network: flat.network.take(),
+                reuse: flat.snell_reuse,
+                obfs: flat.snell_obfs.take(),
+                obfs_host: flat.snell_obfs_host.take(),
+            }),
             NodeProtocol::Direct => OutboundConfig::Direct,
             NodeProtocol::Block => OutboundConfig::Block,
         };
@@ -779,6 +821,18 @@ struct WireOptions<'a> {
     anytls_min_idle_session: Option<usize>,
     anytls_idle_session_check_interval: Option<u64>,
     anytls_idle_session_timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_psk: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_mode: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_reuse: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_obfs: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snell_obfs_host: Option<&'a str>,
     mark: Option<u32>,
     tags: &'a [String],
     subscription_id: Option<uuid::Uuid>,
@@ -909,6 +963,16 @@ impl<'a> WireOptions<'a> {
                 wire.anytls_idle_session_check_interval = config.idle_session_check_interval;
                 wire.anytls_idle_session_timeout = config.idle_session_timeout;
                 wire.set_tls(&config.tls);
+            }
+            OutboundConfig::Snell(config) => {
+                wire.password = config.psk.as_deref();
+                wire.snell_psk = config.psk.as_deref();
+                wire.snell_version = config.version;
+                wire.snell_mode = config.mode.as_deref();
+                wire.snell_reuse = config.reuse;
+                wire.snell_obfs = config.obfs.as_deref();
+                wire.snell_obfs_host = config.obfs_host.as_deref();
+                wire.network = config.network.as_deref();
             }
             OutboundConfig::Direct | OutboundConfig::Block => {}
         }

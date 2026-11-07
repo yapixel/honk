@@ -117,6 +117,8 @@ fn protocol_from_name(proxy_type: &str) -> Result<NodeProtocol, &'static str> {
         Ok(NodeProtocol::Juicity)
     } else if proxy_type.eq_ignore_ascii_case("anytls") {
         Ok(NodeProtocol::AnyTLS)
+    } else if proxy_type.eq_ignore_ascii_case("snell") {
+        Ok(NodeProtocol::Snell)
     } else {
         Err("unsupported proxy type")
     }
@@ -218,7 +220,11 @@ fn validate_source(mapping: &Mapping) -> Result<ProxySource, &'static str> {
     // cannot honor, not a restriction, so the node still imports for TCP.
     let udp_restrictable = matches!(
         protocol,
-        NodeProtocol::Trojan | NodeProtocol::VMess | NodeProtocol::VLess | NodeProtocol::AnyTLS
+        NodeProtocol::Trojan
+            | NodeProtocol::VMess
+            | NodeProtocol::VLess
+            | NodeProtocol::AnyTLS
+            | NodeProtocol::Snell
     );
     if udp == Some(false) && !udp_restrictable {
         return Err("UDP restriction is unsupported for this protocol");
@@ -375,6 +381,48 @@ fn apply_protocol(mapping: &Mapping, node: &mut Node) -> Result<(), &'static str
             config.idle_session_timeout =
                 yaml_duration_alias(mapping, &["idle-session-timeout", "idle_session_timeout"])?;
         }
+        OutboundConfig::Snell(config) => {
+            config.psk = yaml_text_alias(mapping, &["psk"])?.or(password);
+            config.version = yaml_u64_alias(mapping, &["version"])?
+                .map(|v| u8::try_from(v).map_err(|_| "Snell version must be 3, 4, 5, or 6"))
+                .transpose()?;
+            config.mode = yaml_text_alias(mapping, &["mode"])?;
+            config.reuse = yaml_bool_alias(mapping, &["reuse"])?;
+
+            match yaml_value(mapping, "obfs-opts") {
+                None | Some(serde_yaml::Value::Null) => {}
+                Some(serde_yaml::Value::Mapping(opts)) => {
+                    let mode = match yaml_value(opts, "mode") {
+                        None | Some(serde_yaml::Value::Null) => None,
+                        Some(serde_yaml::Value::String(mode)) => {
+                            let trimmed = mode.trim();
+                            let lower = trimmed.to_ascii_lowercase();
+                            match lower.as_str() {
+                                "" | "off" | "none" => None,
+                                "http" | "tls" => Some(lower),
+                                _ => return Err("Snell obfs mode must be off, http or tls"),
+                            }
+                        }
+                        Some(_) => return Err("Snell obfs mode must be off, http or tls"),
+                    };
+                    if let Some(mode) = mode {
+                        config.obfs = Some(mode);
+                        config.obfs_host = match yaml_value(opts, "host") {
+                            Some(serde_yaml::Value::String(host)) => {
+                                let trimmed = host.trim();
+                                if trimmed.is_empty() {
+                                    None
+                                } else {
+                                    Some(trimmed.to_string())
+                                }
+                            }
+                            _ => None,
+                        };
+                    }
+                }
+                Some(_) => return Err("Snell obfs mode must be off, http or tls"),
+            }
+        }
         OutboundConfig::Direct | OutboundConfig::Block => unreachable!(),
     }
     Ok(())
@@ -432,6 +480,7 @@ fn apply_stream(mapping: &Mapping, node: &mut Node, udp: Option<bool>) -> Result
                 // representable; `udp: true` keeps the TCP node as-is.
                 OutboundConfig::Vmess(config) if !udp => config.network = Some(network),
                 OutboundConfig::Vless(config) => config.network = Some(network),
+                OutboundConfig::Snell(config) => config.network = Some(network),
                 _ => {}
             }
         }
@@ -683,6 +732,9 @@ fn validate_imported_node(node: &Node) -> Result<(), &'static str> {
         OutboundConfig::AnyTls(config) => {
             nonempty(config.password.as_ref())?;
         }
+        OutboundConfig::Snell(config) => {
+            nonempty(config.psk.as_ref())?;
+        }
         _ => {}
     }
     Ok(())
@@ -766,5 +818,108 @@ proxies:
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].name, "equivalent-integers");
         assert_eq!(nodes[0].hysteria2().unwrap().quic.mtu, Some(1200));
+    }
+
+    #[test]
+    fn parse_snell_clash_proxies() {
+        use honk_config::types::NodeProtocol;
+
+        let subscription = Subscription {
+            sub_type: SubscriptionType::Clash,
+            ..Default::default()
+        };
+        let nodes = parse_subscription_content(
+            &subscription,
+            r#"
+proxies:
+  - name: snell-v4
+    type: snell
+    server: 1.2.3.4
+    port: 8388
+    psk: secret4
+    udp: true
+    version: 4
+    reuse: true
+  - name: snell-v6
+    type: snell
+    server: 1.2.3.4
+    port: 8389
+    psk: secret6
+    version: 6
+    mode: unshaped
+  - name: snell-v3
+    type: snell
+    server: 1.2.3.4
+    port: 8387
+    psk: secret3
+    udp: false
+    version: 3
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].name, "snell-v4");
+        assert_eq!(nodes[0].protocol(), NodeProtocol::Snell);
+        let snell0 = nodes[0].snell().unwrap();
+        assert_eq!(snell0.psk.as_deref(), Some("secret4"));
+        assert_eq!(snell0.version, Some(4));
+        assert_eq!(snell0.reuse, Some(true));
+        assert_eq!(snell0.network.as_deref(), Some("tcp,udp"));
+        assert_eq!(nodes[0].network(), Some("tcp,udp"));
+
+        assert_eq!(nodes[1].name, "snell-v6");
+        assert_eq!(nodes[1].protocol(), NodeProtocol::Snell);
+        let snell1 = nodes[1].snell().unwrap();
+        assert_eq!(snell1.psk.as_deref(), Some("secret6"));
+        assert_eq!(snell1.version, Some(6));
+        assert_eq!(snell1.mode.as_deref(), Some("unshaped"));
+        assert_eq!(snell1.network.as_deref(), None);
+        assert_eq!(nodes[1].network(), None);
+
+        assert_eq!(nodes[2].name, "snell-v3");
+        assert_eq!(nodes[2].protocol(), NodeProtocol::Snell);
+        let snell2 = nodes[2].snell().unwrap();
+        assert_eq!(snell2.psk.as_deref(), Some("secret3"));
+        assert_eq!(snell2.version, Some(3));
+        assert_eq!(snell2.network.as_deref(), Some("tcp"));
+        assert_eq!(nodes[2].network(), Some("tcp"));
+    }
+
+    #[test]
+    fn parse_snell_rejects_unsupported_options() {
+        let subscription = Subscription {
+            sub_type: SubscriptionType::Clash,
+            ..Default::default()
+        };
+        for extra in [
+            "obfs-opts:\n      mode: 1",
+            "obfs-opts:\n      mode: socks",
+            "version: 6\n    obfs-opts:\n      mode: http",
+            "version: 3\n    reuse: true",
+            "version: 300",
+            "up: 100",
+        ] {
+            let content = format!(
+                "proxies:\n  - name: snell\n    type: snell\n    server: 1.2.3.4\n    port: 8388\n    psk: secret\n    {extra}\n"
+            );
+            assert!(
+                parse_subscription_content(&subscription, &content).is_err(),
+                "{extra} must be rejected"
+            );
+        }
+        let content = "proxies:\n  - name: snell\n    type: snell\n    server: 1.2.3.4\n    port: 8388\n    psk: secret\n    obfs-opts:\n      mode: off\n";
+        assert_eq!(
+            parse_subscription_content(&subscription, content)
+                .unwrap()
+                .len(),
+            1
+        );
+        let content = "proxies:\n  - name: snell\n    type: snell\n    server: 1.2.3.4\n    port: 8388\n    psk: secret\n    version: 4\n    obfs-opts:\n      mode: tls\n      host: bing.com\n";
+        let nodes = parse_subscription_content(&subscription, content).unwrap();
+        assert_eq!(nodes.len(), 1);
+        let snell = nodes[0].snell().unwrap();
+        assert_eq!(snell.obfs.as_deref(), Some("tls"));
+        assert_eq!(snell.obfs_host.as_deref(), Some("bing.com"));
     }
 }
