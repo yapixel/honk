@@ -208,6 +208,8 @@ pub struct VpnServerBypass {
 
 /// Mirrors the kernel `VPN_SERVER_PORT` capacity.
 const VPN_SERVER_PORT_CAPACITY: usize = 4096;
+/// Mirrors the kernel `VPN_SERVER_IP` capacity.
+const VPN_SERVER_IP_CAPACITY: usize = 4096;
 
 impl GlobalConfig {
     /// `Ok(None)` when the gate is off; errors name the offending field.
@@ -246,6 +248,9 @@ impl GlobalConfig {
         let ip = nets("vpn_server_ip", &g.vpn_server_ip)?;
         if ip.iter().any(|net| net.prefix_len() == 0) {
             return Err(("vpn_server_ip", "cannot be a default route (/0)"));
+        }
+        if ip.len() > VPN_SERVER_IP_CAPACITY {
+            return Err(("vpn_server_ip", "has more than 4096 entries"));
         }
         if g.vpn_server_port.is_empty() {
             return Err((
@@ -2151,5 +2156,13 @@ mod builtin_nodes_tests {
         big.global.vpn_server_l4proto.clear(); // default: both tcp and udp = 2
         big.global.vpn_server_port = vec!["1-2049".into()]; // 2049 * 2 = 4098 > 4096
         assert!(big.validate_detailed().is_err());
+
+        let mut many_ips = config.clone();
+        many_ips.global.vpn_server_ip = (0..4097u32)
+            .map(|i| std::net::Ipv4Addr::from(0x0a00_0000 + i).to_string())
+            .collect();
+        assert!(many_ips.validate_detailed().is_err());
+        many_ips.global.vpn_server_ip.pop();
+        assert!(many_ips.validate_detailed().is_ok());
     }
 }

@@ -304,21 +304,21 @@ fn do_tproxy_wan_egress_tcp(
             true,
         );
         let flags = crate::maps::datapath_flags();
-        if vpn_gate_direct(flags, tuples) {
+        let (mut decision, generation) = match crate::route::route(
+            &mut pkt.routing_input,
+            pname,
+            flags,
+            &mut pkt.route_witness.output,
+        ) {
+            Ok(result) => result,
+            Err(_) => return Err(TC_ACT_SHOT),
+        };
+        if decision.vpn_gate_may_override() && vpn_gate_direct(flags, tuples) {
             outbound = OUTBOUND_DIRECT;
             mark = 0;
             must = false;
             routing_generation = 0;
         } else {
-            let (mut decision, generation) = match crate::route::route(
-                &mut pkt.routing_input,
-                pname,
-                flags,
-                &mut pkt.route_witness.output,
-            ) {
-                Ok(result) => result,
-                Err(_) => return Err(TC_ACT_SHOT),
-            };
             routing_generation = generation;
 
             decision.apply_mode_flags(flags, tuples.five.dst_port);
@@ -720,22 +720,23 @@ fn do_tproxy_wan_egress_udp(
     let flags = crate::maps::datapath_flags();
     let routing_generation: u64;
     let direct_mark_index: u32;
-    if vpn_gate_direct(flags, tuples) {
+    let (mut decision, generation) = match crate::route::route(
+        &mut pkt.routing_input,
+        pname,
+        flags,
+        &mut pkt.route_witness.output,
+    ) {
+        Ok(result) => result,
+        Err(_) => return Err(TC_ACT_SHOT),
+    };
+    let vpn_bypass = decision.vpn_gate_may_override() && vpn_gate_direct(flags, tuples);
+    if vpn_bypass {
         outbound = OUTBOUND_DIRECT;
         mark = 0;
         must = false;
         routing_generation = 0;
         direct_mark_index = u32::MAX;
     } else {
-        let (mut decision, generation) = match crate::route::route(
-            &mut pkt.routing_input,
-            pname,
-            flags,
-            &mut pkt.route_witness.output,
-        ) {
-            Ok(result) => result,
-            Err(_) => return Err(TC_ACT_SHOT),
-        };
         routing_generation = generation;
 
         decision.apply_mode_flags(flags, tuples.five.dst_port);
@@ -756,7 +757,9 @@ fn do_tproxy_wan_egress_udp(
         let must_u8 = must as u8;
         let pname = pid_pname_opt.map(|pid_pname| &pid_pname.pname);
         let pid = pid_pname_opt.map_or(0, |pid_pname| pid_pname.pid);
-        let routing_meta_flags = if outbound == OUTBOUND_DIRECT && mark == 0 {
+        let routing_meta_flags = if vpn_bypass {
+            ROUTING_META_FLAG_OFFLOAD | honk_ebpf_common::ROUTING_META_FLAG_VPN_BYPASS
+        } else if outbound == OUTBOUND_DIRECT && mark == 0 {
             ROUTING_META_FLAG_OFFLOAD
         } else if outbound != OUTBOUND_BLOCK {
             ROUTING_META_FLAG_WAN_USERSPACE

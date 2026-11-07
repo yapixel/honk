@@ -99,6 +99,12 @@ impl RoutingDecision {
         }
     }
 
+    /// The VPN server gate may replace any decision except a final `must` or `block`.
+    #[inline(always)]
+    pub fn vpn_gate_may_override(&self) -> bool {
+        self.must == 0 && self.outbound != crate::OutboundIndex::Block as u32
+    }
+
     /// Clash all-direct mode (`DATAPATH_FLAG_OFFLOAD_ALL`): DNS, `must` and
     /// `block` stay as routed; every other flow becomes a final `direct`,
     /// keeping the rule mark only when the rule itself routed `direct`. Unlike
@@ -560,5 +566,29 @@ mod normalization_tests {
         check(&[0xf0, 0x90, 0x80, 0x80]);
         check(&[0xf4, 0x8f, 0xbf, 0xbf]);
         check(&[0xed, 0xa0, 0x80]);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn vpn_gate_never_overrides_must_or_block() {
+    use crate::OutboundIndex::{Block, Direct, UserBase};
+    for (outbound, must, expected) in [
+        (UserBase, 0, true),
+        (Direct, 0, true),
+        (UserBase, 1, false),
+        (Direct, 1, false),
+        (Block, 0, false),
+    ] {
+        let decision = RoutingDecision {
+            outbound: outbound as u32,
+            must,
+            ..Default::default()
+        };
+        assert_eq!(
+            decision.vpn_gate_may_override(),
+            expected,
+            "{outbound:?} must={must}"
+        );
     }
 }

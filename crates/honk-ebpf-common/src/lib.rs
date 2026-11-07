@@ -377,7 +377,7 @@ pub struct RoutingMetaData {
     pub mark: u32,    // offset 1 → u64 bits 8-39
     pub must: u8,     // offset 5 → u64 bit 40
     pub dscp: u8,     // offset 6 → u64 bits 48-55
-    pub _pad: u8,     // offset 7 → u64 bits 56-63 (published, offload, WAN userspace)
+    pub _pad: u8,     // offset 7 → u64 bits 56-63 (published, offload, WAN userspace, VPN bypass)
 }
 
 /// Bit 57 of `RoutingMeta::raw`: a cached native direct decision. LAN sets
@@ -396,6 +396,10 @@ pub const ROUTING_META_FLAG_PUBLISHED: u64 = 1 << 56;
 /// Unlike native LAN direct/must decisions, its endpoint owns retirement of
 /// conn state and token-zero handoff/redirect metadata under the UDP reader fence.
 pub const ROUTING_META_FLAG_WAN_USERSPACE: u64 = 1 << 58;
+
+/// Bit 59 of `RoutingMeta::raw`: a WAN UDP direct decision made by the VPN
+/// server gate, so a readiness drop retires only the gate's own flows.
+pub const ROUTING_META_FLAG_VPN_BYPASS: u64 = 1 << 59;
 
 impl RoutingMeta {
     /// Whether the datapath has published a routing decision (bit 56).

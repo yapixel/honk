@@ -99,7 +99,7 @@ LAN TCP 与非 DNS UDP 在 bond 上被拦截时，`REDIRECT_TRACK` 记下 master
 | `lan_ingress_l2`, `lan_ingress_l3` | LAN TC ingress | 检查 admission，绕过特殊/控制面及非 DNS 本地流量，执行单源新流限制与包含端口 53 的有序路由策略、DNS 接管判断、连接状态、direct 卸载、代理重定向、TX 计数、分片 verdict 记录，以及可选的歧义 UDP 暂存。 |
 | `wan_ingress_l2`, `wan_ingress_l3` | WAN TC ingress | 刷新反向连接状态；LAN/WAN 共用接口上不挂接。 |
 | `lan_egress_l2`, `lan_egress_l3` | LAN TC egress | 刷新反向连接状态，不从 `dae0` 的 UDP 包创建新条目；抑制本机生成的 ICMPv6 Redirect。LAN/WAN 共用接口上跳过。 |
-| `wan_egress_l2`, `wan_egress_l3` | WAN TC egress | 路由主机发起的 TCP/UDP，使用进程名与控制面旁路数据，检查出站连通性，缓存决策并重定向代理流量；抑制本机生成的 ICMPv6 Redirect（LAN/WAN 共用接口的 LAN-egress hook 被跳过）。 |
+| `wan_egress_l2`, `wan_egress_l3` | WAN TC egress | 路由主机发起的 TCP/UDP，使用进程名与控制面旁路数据，检查出站连通性，缓存决策并重定向代理流量；抑制本机生成的 ICMPv6 Redirect（LAN/WAN 共用接口的 LAN-egress hook 被跳过）。在路由之后应用 VPN 服务端门控：当 `DATAPATH_FLAG_VPN_GATE` 和 `DATAPATH_FLAG_VPN_READY` 均置位且目的地址匹配 `VPN_SERVER_IP`/`VPN_SERVER_PORT` 时，新流无标记直连，除非路由决策为 `must` 或 `block`。 |
 | `dae0_ingress` | 主机 `dae0` 的 TC ingress | 从 `REDIRECT_TRACK` 恢复回复帧信息与 RX 归属，或使用不计数的客户端回退；[续期符合条件的 UDP owner](#udp-生存期续期)。 |
 | `dae0peer_ingress` | `daens` `dae0peer` 的 TC ingress | 在链路 scrub 后恢复 UDP53 provenance 与 SYN incarnation；分配 UDP listener。TCP 保留原生 established/TIME_WAIT 查找。 |
 | `tproxy_sk_lookup` | `daens` 中的 `sk_lookup` | 用 `LISTEN_SOCKET_MAP` 中的透明 listener 覆盖普通 socket 查找。 |
@@ -139,7 +139,9 @@ TC 入口点是原始函数，接受 `*mut __sk_buff`，带 `#[unsafe(no_mangle)
 | `OUTBOUND_STATS` | 直接以 `u8` 出站编号为索引的 256 项（`MAX_OUTBOUNDS`）per-CPU 数组。每个 32-byte `OutboundStatsCounters` 值紧凑保存 `tx_packets`、`tx_bytes`、`rx_packets`、`rx_bytes`；当前 ABI 不使用 `outbound * 4 + counter` 索引。 |
 | `LISTEN_SOCKET_MAP` | 16 槽 `SockMap`；key `0..=9` 保存两个 TCP 和八个 UDP 透明 listener。 |
 | `DATAPATH_STATE_MAP` | 单槽 admission 数组。零值不改动地放行流量；非零值启用分类与重定向。 |
-| `DATAPATH_FLAGS_MAP` | 单槽运行时策略字，存 Rule/Direct 卸载属性、`global.nfqueue_enable` 和 NFQUEUE ready fence。新流分类时读它；已建立流的 direct 卸载只用缓存元数据。 |
+| `DATAPATH_FLAGS_MAP` | 单槽运行时策略字：Rule/Direct 卸载属性、VPN 门控位 `DATAPATH_FLAG_VPN_GATE`（bit 5，门控已配置）与 `DATAPATH_FLAG_VPN_READY`（bit 6，VPN 就绪），以及 `global.nfqueue_enable` 与 NFQUEUE ready 栅栏。新流分类读取它；已建立流的 direct 卸载使用缓存元数据。 |
+| `VPN_SERVER_IP` | LPM trie，4096 项，IPv4 存为 `::ffff:` 映射地址，来自 `global.vpn_server_ip` 的 VPN 服务端目的地址。 |
+| `VPN_SERVER_PORT` | Hash map，u32 键 `(l4proto << 16) | port`（主机字节序端口）映射到 u8，4096 项，来自 `vpn_server_port` x `vpn_server_l4proto`。 |
 | `SOCKET_IDENTITY` | 不克隆的 `SK_STORAGE`，保存 socket 第一次被捕获时的 PID 和可执行文件 basename。存储跟着实际 socket 的生命周期走，不受固定 hash 项数和用户态过期清理约束。WAN TC 只查询；cgroup 的 create/connect/sendmsg 会同步补捕缺失的身份。 |
 | `CONN_STATE_OCCUPANCY` | 两槽 per-CPU 插入和内核删除计数，再结合用户态的实际删除数估算占用。这条路径不再由内核删除 tuple，所以内核删除计数一直是零。 |
 | `AUX_OCCUPANCY` | 两槽 per-CPU 计数器，统计 redirect 和 handoff 的插入；用户态减去实际删除数。 |
@@ -296,7 +298,7 @@ TCP 健康检查只作用于新 SYN 的发布；已建立的连接和缓存命�
 
 ### 主机发起的 WAN UDP
 
-`wan_egress` 只分类本机生成的流量。转发数据包带着真实的 ingress ifindex，因此原样放行。带 honk 自有 mark 的 socket，以及匹配控制面 socket 身份的流量，也会 bypass。存活且已发布连接状态的非 DNS UDP 流走只查询的缓存路由路径。miss 时只跑一次路由并发布完整状态，后续数据包再用缓存。DNS 是短生命周期，不创建这项 UDP 缓存。准备 redirect 失败时，例如 handoff/redirect map 已满或归属不匹配，WAN TCP 和 UDP 数据包会被丢弃，不会原生放行；map 已满由现有插入失败计数记录。
+`wan_egress` 只分类本机生成的流量。转发数据包带着真实的 ingress ifindex，因此原样放行。带 honk 自有 mark 的 socket，以及匹配控制面 socket 身份的流量，也会 bypass。存活且已发布连接状态的非 DNS UDP 流走只查询的缓存路由路径。miss 时只跑一次路由并发布完整状态，后续数据包再用缓存。DNS 是短生命周期，不创建这项 UDP 缓存。准备 redirect 失败时，例如 handoff/redirect map 已满或归属不匹配，WAN TCP 和 UDP 数据包会被丢弃，不会原生放行；map 已满由现有插入失败计数记录。VPN 门控的直连 UDP 决策将 `RoutingMeta` bit 59（`ROUTING_META_FLAG_VPN_BYPASS`）与卸载 bit 57 一同存储；在就绪状态转换时，用户态会退役目的地匹配该门控、且与新状态不符的已发布 WAN UDP 流（变为就绪时退役 bit 58 `ROUTING_META_FLAG_WAN_USERSPACE` 的非 `must` 流，就绪失效时退役 bit 59 的流），因此 LAN 流绝不会被该门控退役。
 
 ## admission 顺序
 

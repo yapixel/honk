@@ -5,7 +5,10 @@ use crate::ebpf::{
 };
 use honk_ebpf_common::conn::ConnState;
 use honk_ebpf_common::dae_ip::In6Addr;
-use honk_ebpf_common::{ROUTING_META_FLAG_OFFLOAD, ROUTING_META_FLAG_PUBLISHED, TuplesKey};
+use honk_ebpf_common::{
+    ROUTING_META_FLAG_PUBLISHED, ROUTING_META_FLAG_VPN_BYPASS, ROUTING_META_FLAG_WAN_USERSPACE,
+    TuplesKey,
+};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -242,7 +245,9 @@ fn read_interface_counters(name: &str) -> Option<TunTrafficCounters> {
     })
 }
 
-/// Published egress UDP decisions to the gate that disagree with `ready`.
+/// Published WAN egress UDP decisions to the gate that disagree with `ready`:
+/// proxied non-`must` flows on the ready edge, the gate's own direct flows on
+/// the drop. LAN flows never carry either bit.
 ///
 /// Unpublished entries belong to an in-flight decision and are left to it.
 fn select_vpn_bypass_udp(
@@ -258,10 +263,15 @@ fn select_vpn_bypass_udp(
     ebpf.conn_state_for_each_chunk(64, &mut cursor, &mut |chunk| {
         for (key, state) in chunk {
             let raw = unsafe { state.meta.raw };
+            let disagrees = if ready {
+                raw & ROUTING_META_FLAG_WAN_USERSPACE != 0 && (raw >> 40) & 1 == 0
+            } else {
+                raw & ROUTING_META_FLAG_VPN_BYPASS != 0
+            };
             if key.l4proto != libc::IPPROTO_UDP as u8
                 || state.is_wan_ingress_direction != 0
                 || raw & ROUTING_META_FLAG_PUBLISHED == 0
-                || (raw & ROUTING_META_FLAG_OFFLOAD != 0) == ready
+                || !disagrees
                 || !gate
                     .ports
                     .iter()
@@ -285,7 +295,7 @@ fn retire_selected(
     ebpf: &mut dyn EbpfBackend,
     selected: &[(TuplesKey, ConnState)],
     udp_pool: Option<&crate::control::udp_endpoint::UdpEndpointPool>,
-) -> usize {
+) -> anyhow::Result<usize> {
     let requests: Vec<_> = selected
         .iter()
         .map(|(key, expected)| RetireRequest {
@@ -297,13 +307,7 @@ fn retire_selected(
         })
         .collect();
     let mut outcomes = vec![RetireOutcome::NotRun; requests.len()];
-    let retired = match ebpf.retire_batch(&requests, &mut outcomes) {
-        Ok(progress) => progress.conn as usize,
-        Err(error) => {
-            warn!(error = %format_args!("{:#}", error.source), "failed to retire VPN server bypass UDP flows");
-            error.counts.conn as usize
-        }
-    };
+    let result = ebpf.retire_batch(&requests, &mut outcomes);
     // Deletes before a failure are real, so their endpoints retire too.
     if let Some(pool) = udp_pool {
         for ((key, expected), outcome) in selected.iter().zip(&outcomes) {
@@ -312,7 +316,15 @@ fn retire_selected(
             }
         }
     }
-    retired
+    match result {
+        Ok(progress) => Ok(progress.conn as usize),
+        Err(error) => Err(anyhow::anyhow!(
+            "retired {} of {} VPN server bypass UDP flows: {:#}",
+            error.counts.conn,
+            selected.len(),
+            error.source
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -322,10 +334,11 @@ pub(crate) fn retire_vpn_bypass_udp_backend(
     ready: bool,
 ) -> anyhow::Result<usize> {
     let selected = select_vpn_bypass_udp(ebpf, gate, ready)?;
-    Ok(retire_selected(ebpf, &selected, None))
+    retire_selected(ebpf, &selected, None)
 }
 
-/// Scan under the read lock; take the write lock per retire batch like the janitor.
+/// Scan under the read lock, then take the write lock per retire batch. Runs
+/// inline only on readiness transitions, unlike the janitor's budgeted sweep.
 pub async fn retire_vpn_bypass_udp(
     ebpf: &Arc<RwLock<Box<dyn EbpfBackend>>>,
     gate: &honk_config::config::VpnServerBypass,
@@ -335,7 +348,7 @@ pub async fn retire_vpn_bypass_udp(
     let selected = select_vpn_bypass_udp(ebpf.read().await.as_ref(), gate, ready)?;
     let mut retired = 0;
     for chunk in selected.chunks(RETIRE_BATCH_CAPACITY) {
-        retired += retire_selected(ebpf.write().await.as_mut(), chunk, Some(udp_pool));
+        retired += retire_selected(ebpf.write().await.as_mut(), chunk, Some(udp_pool))?;
     }
     Ok(retired)
 }
@@ -352,17 +365,19 @@ pub async fn run_driver_loop<F, Fut, C, Cut, R, RC, DR>(
     notify: Arc<Notify>,
     mut stop_rx: watch::Receiver<bool>,
     poll_interval: Duration,
+    idle_interval: Duration,
 ) where
     F: FnMut(bool) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>>,
     C: FnMut(bool, Option<String>) -> Cut,
-    Cut: std::future::Future<Output = ()>,
+    Cut: std::future::Future<Output = bool>,
     R: FnMut() -> Vec<InterfaceCandidateInfo>,
     RC: FnMut(&str) -> Option<TunTrafficCounters>,
     DR: FnMut(u32) -> bool,
 {
     let mut tracker = VpnReadinessTracker::default();
     let mut current_ready: Option<bool> = Some(false);
+    let mut applied: (bool, Option<String>) = (false, None);
 
     loop {
         if *stop_rx.borrow() {
@@ -383,7 +398,6 @@ pub async fn run_driver_loop<F, Fut, C, Cut, R, RC, DR>(
             match set_ready(next_ready).await {
                 Ok(()) => {
                     current_ready = Some(next_ready);
-                    on_ready_change(next_ready, eval.ready_interface.clone()).await;
                     if next_ready {
                         let iface = eval.ready_interface.as_deref().unwrap_or("unknown");
                         info!(interface = iface, "VPN server bypass ready");
@@ -397,27 +411,29 @@ pub async fn run_driver_loop<F, Fut, C, Cut, R, RC, DR>(
                 }
             }
         }
+        let next = (next_ready, eval.ready_interface.clone());
+        if current_ready == Some(next_ready) && applied != next {
+            if on_ready_change(next.0, next.1.clone()).await {
+                applied = next;
+            } else {
+                retry_needed = true;
+            }
+        }
 
-        let must_poll = eval.pending || retry_needed;
-        if must_poll {
-            tokio::select! {
-                _ = stop_rx.changed() => {
-                    if *stop_rx.borrow() {
-                        break;
-                    }
-                }
-                _ = notify.notified() => {}
-                _ = tokio::time::sleep(poll_interval) => {}
-            }
+        // Interface and route events are not routed here, so an idle gate still re-samples.
+        let wait = if eval.pending || retry_needed {
+            poll_interval
         } else {
-            tokio::select! {
-                _ = stop_rx.changed() => {
-                    if *stop_rx.borrow() {
-                        break;
-                    }
+            idle_interval
+        };
+        tokio::select! {
+            _ = stop_rx.changed() => {
+                if *stop_rx.borrow() {
+                    break;
                 }
-                _ = notify.notified() => {}
             }
+            _ = notify.notified() => {}
+            _ = tokio::time::sleep(wait) => {}
         }
     }
 }
@@ -458,8 +474,12 @@ impl VpnWatcher {
                         } else {
                             None
                         });
-                        if let Err(err) = retire_vpn_bypass_udp(&ebpf, &gate, ready, &pool).await {
-                            warn!(%err, "failed to retire UDP flows on VPN readiness change");
+                        match retire_vpn_bypass_udp(&ebpf, &gate, ready, &pool).await {
+                            Ok(_) => true,
+                            Err(err) => {
+                                warn!(%err, "failed to retire UDP flows on VPN readiness change; will retry");
+                                false
+                            }
                         }
                     }
                 },
@@ -469,6 +489,7 @@ impl VpnWatcher {
                 notify_clone,
                 stop_rx,
                 Duration::from_secs(1),
+                Duration::from_secs(5),
             )
             .await;
         });
@@ -705,7 +726,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn driver_calls_set_ready_only_on_change_and_stops_polling() {
+    async fn driver_calls_set_ready_only_on_change_and_backs_off_when_idle() {
         const IFF_UP: u32 = libc::IFF_UP as u32;
         let gate = honk_config::config::VpnServerBypass {
             ip: vec!["198.51.100.0/24".parse().unwrap()],
@@ -737,7 +758,7 @@ mod tests {
                     calls.lock().push(ready);
                     async { Ok(()) }
                 },
-                |_, _| async {},
+                |_, _| async { true },
                 || vec![tun.clone()],
                 |name| {
                     assert_eq!(name, "tun0");
@@ -751,6 +772,7 @@ mod tests {
                 notify,
                 stop_rx,
                 Duration::from_millis(10),
+                Duration::from_secs(3600),
             )
             .await;
         });
@@ -764,8 +786,84 @@ mod tests {
         let reads_after_ready = read_count.load(Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        // Polling stopped because pending is false; reads count did not advance.
+        // Nothing is pending, so the driver waits for the idle interval.
         assert_eq!(read_count.load(Ordering::SeqCst), reads_after_ready);
+
+        let _ = stop_tx.send(true);
+        let _ = driver_task.await;
+    }
+
+    #[tokio::test]
+    async fn driver_notices_tun_lifecycle_without_notify_and_retries_retirement() {
+        const IFF_UP: u32 = libc::IFF_UP as u32;
+        let gate = honk_config::config::VpnServerBypass {
+            ip: vec!["198.51.100.0/24".parse().unwrap()],
+            ports: vec![(4500, 4500)],
+            protocols: vec![17],
+            interface_address: vec![],
+        };
+        let tun = InterfaceCandidateInfo {
+            name: "tun0".into(),
+            ifindex: 30,
+            flags: IFF_UP,
+            addresses: vec!["10.8.0.2".parse().unwrap()],
+        };
+        let interfaces = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let set_ready_calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let changes = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (stop_tx, stop_rx) = watch::channel(false);
+
+        let driver_task = tokio::spawn({
+            let interfaces = Arc::clone(&interfaces);
+            let calls = Arc::clone(&set_ready_calls);
+            let changes = Arc::clone(&changes);
+            async move {
+                run_driver_loop(
+                    &gate,
+                    |ready| {
+                        calls.lock().push(ready);
+                        async { Ok(()) }
+                    },
+                    |ready, iface| {
+                        let mut changes = changes.lock();
+                        changes.push((ready, iface));
+                        // The first retirement fails and must be retried.
+                        let ok = changes.len() > 1;
+                        async move { ok }
+                    },
+                    || interfaces.lock().clone(),
+                    |_| {
+                        Some(TunTrafficCounters {
+                            rx_packets: reads.fetch_add(1, Ordering::SeqCst) as u64,
+                            tx_packets: 0,
+                        })
+                    },
+                    |_| false,
+                    Arc::new(Notify::new()),
+                    stop_rx,
+                    Duration::from_millis(10),
+                    Duration::from_millis(20),
+                )
+                .await;
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        interfaces.lock().push(tun);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(*set_ready_calls.lock(), vec![true]);
+        interfaces.lock().clear();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(*set_ready_calls.lock(), vec![true, false]);
+        assert_eq!(
+            *changes.lock(),
+            vec![
+                (true, Some("tun0".to_string())),
+                (true, Some("tun0".to_string())),
+                (false, None),
+            ]
+        );
 
         let _ = stop_tx.send(true);
         let _ = driver_task.await;
@@ -794,27 +892,21 @@ mod tests {
             padding: [0; 3],
         };
 
-        let make_state = |ingress: u8, direct: bool, published: bool| {
-            let outbound = if direct {
-                OutboundIndex::Direct as u8
-            } else {
-                1
-            };
+        let wan_proxied = ROUTING_META_FLAG_PUBLISHED | ROUTING_META_FLAG_WAN_USERSPACE;
+        let gate_direct = ROUTING_META_FLAG_PUBLISHED
+            | honk_ebpf_common::ROUTING_META_FLAG_OFFLOAD
+            | ROUTING_META_FLAG_VPN_BYPASS;
+        let make_state = |ingress: u8, outbound: u8, must: u8, flags: u64| {
             let mut meta = RoutingMeta {
                 data: RoutingMetaData {
                     outbound,
                     mark: 0,
-                    must: 0,
+                    must,
                     dscp: 0,
                     _pad: 0,
                 },
             };
-            if direct {
-                unsafe { meta.raw |= ROUTING_META_FLAG_OFFLOAD };
-            }
-            if published {
-                unsafe { meta.raw |= ROUTING_META_FLAG_PUBLISHED };
-            }
+            unsafe { meta.raw |= flags };
             ConnState {
                 is_wan_ingress_direction: ingress,
                 state: UdpDecisionState::None as u8,
@@ -831,31 +923,55 @@ mod tests {
         let key_ingress = make_key(41005, vpn_ip, 4500, libc::IPPROTO_UDP as u8);
 
         // Flow 1: Matching UDP egress proxied
-        backend
-            .udp_conn_states
-            .insert(key_bytes(&key_udp_proxied), make_state(0, false, true));
+        backend.udp_conn_states.insert(
+            key_bytes(&key_udp_proxied),
+            make_state(0, 1, 0, wan_proxied),
+        );
         // Flow 3: Wrong port
         backend
             .udp_conn_states
-            .insert(key_bytes(&key_wrong_port), make_state(0, false, true));
+            .insert(key_bytes(&key_wrong_port), make_state(0, 1, 0, wan_proxied));
         // Flow 4: Wrong IP
         backend
             .udp_conn_states
-            .insert(key_bytes(&key_wrong_ip), make_state(0, false, true));
+            .insert(key_bytes(&key_wrong_ip), make_state(0, 1, 0, wan_proxied));
         // Flow 5: TCP flow
         backend
             .tcp_conn_states
-            .insert(key_bytes(&key_tcp), make_state(0, false, true));
+            .insert(key_bytes(&key_tcp), make_state(0, 1, 0, wan_proxied));
         // Flow 6: Ingress flow
         backend
             .udp_conn_states
-            .insert(key_bytes(&key_ingress), make_state(1, false, true));
+            .insert(key_bytes(&key_ingress), make_state(1, 1, 0, wan_proxied));
 
         // Flow 7: matching but still being decided (unpublished)
         let key_unpublished = make_key(41006, vpn_ip, 4500, libc::IPPROTO_UDP as u8);
+        backend.udp_conn_states.insert(
+            key_bytes(&key_unpublished),
+            make_state(0, 1, 0, ROUTING_META_FLAG_WAN_USERSPACE),
+        );
+
+        // A LAN client's proxied flow and a WAN `must` flow to the server keep their decisions.
+        let key_lan_proxied = make_key(41007, vpn_ip, 4500, libc::IPPROTO_UDP as u8);
+        backend.udp_conn_states.insert(
+            key_bytes(&key_lan_proxied),
+            make_state(0, 1, 0, ROUTING_META_FLAG_PUBLISHED),
+        );
+        let key_wan_must = make_key(41008, vpn_ip, 4500, libc::IPPROTO_UDP as u8);
         backend
             .udp_conn_states
-            .insert(key_bytes(&key_unpublished), make_state(0, false, false));
+            .insert(key_bytes(&key_wan_must), make_state(0, 1, 1, wan_proxied));
+        // A LAN mode-offloaded direct flow is not the gate's to retire on the drop.
+        let key_lan_direct = make_key(41009, vpn_ip, 4500, libc::IPPROTO_UDP as u8);
+        backend.udp_conn_states.insert(
+            key_bytes(&key_lan_direct),
+            make_state(
+                0,
+                OutboundIndex::Direct as u8,
+                0,
+                ROUTING_META_FLAG_PUBLISHED | honk_ebpf_common::ROUTING_META_FLAG_OFFLOAD,
+            ),
+        );
 
         // Becoming ready: should retire ONLY the matching proxied UDP flow
         let retired = retire_vpn_bypass_udp_backend(&mut backend, &gate, true).unwrap();
@@ -878,9 +994,10 @@ mod tests {
         assert!(backend.tcp_conn_states.contains_key(&key_bytes(&key_tcp)));
 
         // Now insert matching UDP egress direct flow
-        backend
-            .udp_conn_states
-            .insert(key_bytes(&key_udp_direct), make_state(0, true, true));
+        backend.udp_conn_states.insert(
+            key_bytes(&key_udp_direct),
+            make_state(0, OutboundIndex::Direct as u8, 0, gate_direct),
+        );
 
         // Becoming not ready: should retire ONLY the matching direct UDP flow
         let retired2 = retire_vpn_bypass_udp_backend(&mut backend, &gate, false).unwrap();
@@ -896,5 +1013,8 @@ mod tests {
                 .contains_key(&key_bytes(&key_unpublished)),
             "an in-flight decision is left to its owner"
         );
+        for key in [key_lan_proxied, key_wan_must, key_lan_direct] {
+            assert!(backend.udp_conn_states.contains_key(&key_bytes(&key)));
+        }
     }
 }
