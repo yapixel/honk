@@ -59,6 +59,7 @@ pub(crate) const RTM_DELLINK: u16 = 17;
 const RTM_NEWADDR: u16 = 20;
 const RTM_DELADDR: u16 = 21;
 const RTM_NEWROUTE: u16 = 24;
+const RTM_GETROUTE: u16 = 26;
 const RTM_DELRULE: u16 = 33;
 const RTM_NEWRULE: u16 = 32;
 const RTM_NEWNEIGH: u16 = 28;
@@ -790,6 +791,73 @@ fn parse_link_datagram(buf: &[u8], seq: u32, links: &mut Vec<LinkSnapshot>) -> i
     Ok(false)
 }
 
+fn parse_route_datagram(
+    buf: &[u8],
+    seq: u32,
+    ifindexes: &mut std::collections::HashSet<u32>,
+) -> io::Result<bool> {
+    let mut off = 0usize;
+    while off + 16 <= buf.len() {
+        let hlen = u32::from_ne_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
+        if hlen < 16 || off + hlen > buf.len() {
+            return Err(invalid_data("malformed netlink message header"));
+        }
+        let htype = u16::from_ne_bytes(buf[off + 4..off + 6].try_into().unwrap());
+        let hflags = u16::from_ne_bytes(buf[off + 6..off + 8].try_into().unwrap());
+        let hseq = u32::from_ne_bytes(buf[off + 8..off + 12].try_into().unwrap());
+        if hseq != seq {
+            break;
+        }
+        if hflags & NLM_F_DUMP_INTR != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "route dump interrupted by table change",
+            ));
+        }
+        match htype {
+            NLMSG_DONE => return Ok(true),
+            NLMSG_ERROR => {
+                if hlen < 20 {
+                    return Err(invalid_data("short NLMSG_ERROR"));
+                }
+                let err = i32::from_ne_bytes(buf[off + 16..off + 20].try_into().unwrap());
+                return Err(io::Error::from_raw_os_error(-err));
+            }
+            RTM_NEWROUTE => {
+                let msg = &buf[off + 16..off + hlen];
+                if msg.len() >= 12 {
+                    let rtm_dst_len = msg[1];
+                    let mut rtm_table = msg[4] as u32;
+                    let rtm_type = msg[7];
+                    if rtm_dst_len == 0 && rtm_type == RTN_UNICAST {
+                        let mut oif = None;
+                        let _ = for_each_attr(&msg[12..], |ty, payload| {
+                            match ty {
+                                RTA_TABLE if payload.len() == 4 => {
+                                    rtm_table = u32::from_ne_bytes(payload.try_into().unwrap());
+                                }
+                                RTA_OIF if payload.len() == 4 => {
+                                    oif = Some(u32::from_ne_bytes(payload.try_into().unwrap()));
+                                }
+                                _ => {}
+                            }
+                            Ok(())
+                        });
+                        if rtm_table != 255
+                            && let Some(idx) = oif
+                        {
+                            ifindexes.insert(idx);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        off += align(hlen);
+    }
+    Ok(false)
+}
+
 impl NlSock {
     /// Complete RTM_GETLINK dump of the socket's namespace, drained to
     /// NLMSG_DONE (an early return would leave the tail in the socket buffer
@@ -820,6 +888,45 @@ impl NlSock {
                 return Ok(links);
             }
         }
+    }
+
+    /// Complete default route dump across non-local tables for IPv4 and IPv6.
+    pub(crate) fn default_route_ifindexes(&mut self) -> io::Result<std::collections::HashSet<u32>> {
+        let mut ifindexes = std::collections::HashSet::new();
+        for family in [AF_INET as u8, AF_INET6 as u8] {
+            self.seq += 1;
+            let seq = self.seq;
+            let header = RtMsg {
+                rtm_family: family,
+                rtm_dst_len: 0,
+                rtm_src_len: 0,
+                rtm_tos: 0,
+                rtm_table: 0,
+                rtm_protocol: 0,
+                rtm_scope: 0,
+                rtm_type: 0,
+                rtm_flags: 0,
+            };
+            let mut buf = Vec::with_capacity(32);
+            buf.extend_from_slice(&[0u8; 4]);
+            buf.extend_from_slice(&RTM_GETROUTE.to_ne_bytes());
+            buf.extend_from_slice(&(NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
+            buf.extend_from_slice(&seq.to_ne_bytes());
+            buf.extend_from_slice(&0u32.to_ne_bytes());
+            buf.extend_from_slice(pod_bytes(&header));
+            let len = buf.len() as u32;
+            buf[0..4].copy_from_slice(&len.to_ne_bytes());
+            self.send_datagram(&buf)?;
+
+            let mut resp = vec![0u8; 8192];
+            loop {
+                let n = self.recv_one(&mut resp)?;
+                if parse_route_datagram(&resp[..n], seq, &mut ifindexes)? {
+                    break;
+                }
+            }
+        }
+        Ok(ifindexes)
     }
 
     /// Look up a link by name with a 6-byte MAC (client-side filter over

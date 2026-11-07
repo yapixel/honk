@@ -195,6 +195,7 @@ pub struct MockEbpfBackend {
     pub(crate) tc_program_preparation: super::real::programs::TcProgramPreparationFixture,
     #[cfg(test)]
     pub pname_support: super::PnameSupport,
+    pub vpn_server_bypass: Option<super::VpnServerBypassObservation>,
 }
 
 impl MockEbpfBackend {

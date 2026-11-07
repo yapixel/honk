@@ -581,7 +581,14 @@ impl ControlPlane {
             });
             let handle =
                 crate::mode::DatapathFlagsHandle::new(Arc::clone(&self.ebpf), mode_state, None);
-            if let Err(error) = handle.initialize(false, false).await {
+            if let Err(error) = handle
+                .initialize(
+                    false,
+                    false,
+                    !current_config.global.vpn_server_ip.is_empty(),
+                )
+                .await
+            {
                 error!(%error, "failed to initialize reload-scoped datapath flags writer");
                 return Ok(ReloadOutcome::Rejected);
             }

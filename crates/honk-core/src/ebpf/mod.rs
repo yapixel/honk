@@ -98,6 +98,8 @@ impl UdpFlowOwner {
 
 pub const UDP_DECISION_SEQUENCE_MAP: &str = "UDP_DECISION_SEQUENCE";
 pub const RETIRE_FENCE_MAP: &str = "RETIRE_FENCE";
+pub const VPN_SERVER_IP_MAP: &str = "VPN_SERVER_IP";
+pub const VPN_SERVER_PORT_MAP: &str = "VPN_SERVER_PORT";
 
 /// Callback for a bounded janitor scan. Return `false` to stop the scan at a
 /// chunk boundary (used to enforce the janitor time budget).
@@ -325,6 +327,14 @@ pub struct DatapathAttachment {
 }
 
 /// Facts checked during one read of the backend cell, not configuration intent.
+/// VPN server bypass status for datapath observation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct VpnServerBypassObservation {
+    pub enabled: bool,
+    pub ready: bool,
+    pub interface: Option<String>,
+}
+
 /// Unknown occupancy is deliberate: observation never walks a traffic map.
 #[derive(Debug, Clone)]
 pub struct DatapathObservation {
@@ -340,6 +350,7 @@ pub struct DatapathObservation {
     pub attachments: Vec<DatapathAttachment>,
     pub conn_state_capacity: Option<u32>,
     pub errors: Vec<DatapathObservationError>,
+    pub vpn_server_bypass: Option<VpnServerBypassObservation>,
 }
 
 impl DatapathObservation {
@@ -357,6 +368,7 @@ impl DatapathObservation {
             attachments: Vec::new(),
             conn_state_capacity: None,
             errors: Vec::new(),
+            vpn_server_bypass: None,
         }
     }
 
@@ -490,6 +502,17 @@ pub trait EbpfBackend: Send + Sync {
     fn set_datapath_ready(&mut self, _ready: bool) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// Populate VPN server bypass maps before datapath admission.
+    fn populate_vpn_gate(
+        &mut self,
+        _gate: &honk_config::config::VpnServerBypass,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Record the candidate interface name that made VPN server bypass ready.
+    fn set_vpn_bypass_interface(&mut self, _interface: Option<String>) {}
 
     /// Write the mode-based direct-offload policy (the
     /// `DATAPATH_FLAG_OFFLOAD_*` bits) into `DATAPATH_FLAGS_MAP`.  The

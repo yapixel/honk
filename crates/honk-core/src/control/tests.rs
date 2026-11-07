@@ -165,7 +165,7 @@ async fn nfqueue_startup_degradation_clears_config_and_effective_flag() {
     control
         .datapath_flags_handle()
         .expect("datapath flags coordinator")
-        .initialize(enabled, false)
+        .initialize(enabled, false, false)
         .await
         .unwrap();
     let published = writes.lock().last().copied().expect("initial flags");

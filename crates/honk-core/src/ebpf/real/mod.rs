@@ -93,6 +93,8 @@ pub struct RealEbpfBackend {
     trace_dictionaries: crate::observe::flows::kernel::KernelTraceDictionaries,
     udp_staging_quiesce_incomplete: bool,
     aux_deletes: AuxDeleteTally,
+    vpn_gate_enabled: bool,
+    vpn_bypass_interface: Option<String>,
 }
 
 /// Find cgroup2 in the calling thread's mount namespace, not its thread-group leader's.
@@ -260,6 +262,17 @@ impl RealEbpfBackend {
             .get_mut(name)
             .ok_or_else(|| anyhow::anyhow!("map '{name}' not found"))?;
         AyaHashMap::try_from(map).map_err(|error| anyhow::anyhow!("map '{name}': {error}"))
+    }
+
+    fn lpm_trie_mut<'a, K: Pod, V: Pod>(
+        &'a mut self,
+        name: &str,
+    ) -> anyhow::Result<AyaLpmTrie<&'a mut AyaMapData, K, V>> {
+        let map = self
+            .maps_mut()?
+            .get_mut(name)
+            .ok_or_else(|| anyhow::anyhow!("map '{name}' not found"))?;
+        AyaLpmTrie::try_from(map).map_err(|error| anyhow::anyhow!("map '{name}': {error}"))
     }
 
     #[cfg(test)]
@@ -564,6 +577,32 @@ impl EbpfBackend for RealEbpfBackend {
 
     fn commit_tc_programs(&mut self, batch: programs::TcProgramBatch) -> anyhow::Result<()> {
         RealEbpfBackend::commit_tc_programs(self, batch)
+    }
+
+    fn populate_vpn_gate(
+        &mut self,
+        gate: &honk_config::config::VpnServerBypass,
+    ) -> anyhow::Result<()> {
+        let mut ip_map = self.lpm_trie_mut::<[u32; 4], u8>(super::VPN_SERVER_IP_MAP)?;
+        for net in &gate.ip {
+            let key = crate::ebpf::maps::ipnet_to_lpm_key(net);
+            ip_map.insert(&AyaLpmKey::new(key.prefix_len, key.data), &1, 0)?;
+        }
+        let mut port_map = self.hash_map_mut::<u32, u8>(super::VPN_SERVER_PORT_MAP)?;
+        for &(start, end) in &gate.ports {
+            for port in start..=end {
+                for &protocol in &gate.protocols {
+                    // Kernel key: protocol in the high half, host-order port in the low half.
+                    port_map.insert(&(((protocol as u32) << 16) | port as u32), &1, 0)?;
+                }
+            }
+        }
+        self.vpn_gate_enabled = true;
+        Ok(())
+    }
+
+    fn set_vpn_bypass_interface(&mut self, interface: Option<String>) {
+        self.vpn_bypass_interface = interface;
     }
 
     fn set_datapath_ready(&mut self, ready: bool) -> anyhow::Result<()> {
