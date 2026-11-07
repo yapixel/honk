@@ -1,0 +1,56 @@
+name: Snell interop
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex-android
+      - 'feat/snell**'
+    paths:
+      - 'crates/honk-outbound/src/proxy/snell/**'
+      - 'crates/honk-outbound/tests/snell_server_interop.rs'
+      - '.github/workflows/snell-interop.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Snell server interop
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        id: rust-cache
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      - name: Install boring-sys build deps (cmake + libclang for bindgen)
+        run: |
+          set -euo pipefail
+          sudo grep -lE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/* | xargs -r sudo rm -f || true
+          sudo apt-get update
+          sudo apt-get install -y cmake libclang-dev
+      - name: Pull snell-server docker images
+        run: |
+          set -euo pipefail
+          # tag 3.0.1
+          docker pull geekdada/snell-server@sha256:d7368c7d145b370255827c8f22a5ebc4a649b56426c6c36a9914a1bca0d409f0
+          # tag 4.1.1
+          docker pull geekdada/snell-server@sha256:d893d1f22a308d39975252543dc5ec214a9618e266bb70cae785a673c0db3210
+          # tag 5.0.1
+          docker pull geekdada/snell-server@sha256:d79bd3405c58c3122c28e0f7533f1cdc0f3cebfe5b7fc80f08ad04070ca5ff6a
+          # tag 6.0.0
+          docker pull geekdada/snell-server@sha256:37ebe56a46b7509e2bcd32a6b80b76aab77fa69663bc56b9f5d2c6dc9a30570f
+      - name: Run Snell interop tests
+        run: cargo test -p honk-outbound --test snell_server_interop -- --ignored --test-threads=1

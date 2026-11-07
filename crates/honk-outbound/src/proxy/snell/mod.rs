@@ -4,6 +4,8 @@ pub mod aead;
 pub mod cipher;
 pub mod handler;
 pub mod obfs;
+#[cfg(test)]
+pub mod obfs_server;
 pub mod pool;
 pub mod protocol;
 pub mod udp;
@@ -18,3 +20,6 @@ pub use pool::SnellPool;
 pub use protocol::{Snell, connect_request, write_header, write_zero_chunk};
 pub use udp::SnellUdpTransport;
 pub use v6::{SnellV6Mode, V6Codec};
+
+#[cfg(test)]
+mod tests;
