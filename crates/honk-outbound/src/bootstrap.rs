@@ -10,10 +10,11 @@
 //! [`resolve`] first offers the host to the installed [`NodeHostResolver`],
 //! which claims hosts aliases and node hosts explicitly routed by `subtag()`
 //! to a direct upstream. Unclaimed hosts use the configured bootstrap resolver,
-//! then `/etc/hosts` and the platform system resolver (Bionic/netd on Android, or the first
-//! numeric `/etc/resolv.conf` nameserver elsewhere). Every raw DNS socket is
-//! bypass-marked; libc NSS/search-suffix resolution is deliberately not used
-//! on Linux because it can recurse through the transparent proxy.
+//! then `/etc/hosts` and the first numeric `/etc/resolv.conf` nameserver.
+//! Every DNS socket is bypass-marked; libc NSS/search-suffix resolution is
+//! deliberately not used because it can recurse through the transparent proxy.
+//! Android has no `resolv.conf` and Bionic queries netd without honk's mark,
+//! so hostname bootstrap there needs `global.bootstrap_resolver`.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -170,17 +171,11 @@ where
             return Ok(addrs);
         }
     }
-    #[cfg(target_os = "android")]
-    match android_system_resolve(host, deadline).await {
-        Ok(Some(addrs)) => return Ok(addrs),
-        Ok(None) => tracing::debug!(
-            "Android system resolver returned no addresses for '{}'",
-            host
-        ),
-        Err(error) => tracing::debug!("Android system resolver failed for '{}': {}", host, error),
-    }
     let server = system_nameserver().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no numeric system DNS nameserver")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "no numeric /etc/resolv.conf nameserver; set global.bootstrap_resolver",
+        )
     })?;
     let resolver = BootstrapResolver {
         server,
@@ -192,32 +187,6 @@ where
         return Err(io::Error::new(io::ErrorKind::NotFound, "no DNS addresses"));
     }
     Ok(addrs)
-}
-
-/// Android's Bionic resolver obtains DNS servers from netd rather than a
-/// traditional `/etc/resolv.conf`.  Ask it directly when the file is absent;
-/// this keeps rooted devices usable without hard-coding private DNS state.
-#[cfg(target_os = "android")]
-async fn android_system_resolve(
-    host: &str,
-    deadline: Option<tokio::time::Instant>,
-) -> io::Result<Option<Vec<IpAddr>>> {
-    let lookup = tokio::net::lookup_host((host, 0));
-    let addrs = match deadline {
-        Some(deadline) => tokio::time::timeout_at(deadline, lookup)
-            .await
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "Android system DNS timed out")
-            })??,
-        None => lookup.await?,
-    };
-    let mut result = Vec::new();
-    for address in addrs {
-        if !result.contains(&address.ip()) {
-            result.push(address.ip());
-        }
-    }
-    Ok((!result.is_empty()).then_some(result))
 }
 
 fn hosts_addresses(contents: &str, host: &str) -> Vec<IpAddr> {
