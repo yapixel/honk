@@ -33,6 +33,7 @@ mod udp_commit;
 mod udp_group;
 mod udp_listeners;
 mod udp_reverse;
+mod vpn_bypass;
 
 const TC_ACT_UNSPEC: u32 = u32::MAX;
 const TC_ACT_OK: u32 = 0;

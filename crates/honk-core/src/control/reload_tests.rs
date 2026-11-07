@@ -81,6 +81,39 @@ fn udp_nfqueue_toggle_requires_restart() {
     );
 }
 
+#[test]
+fn vpn_server_bypass_settings_stay_restart_required() {
+    let current = Config::default();
+
+    let mut ip = current.clone();
+    ip.global.vpn_server_ip = vec!["198.51.100.1".to_string()];
+    assert_eq!(
+        restart_required_changes(&current, &ip),
+        vec!["global.vpn_server_ip"]
+    );
+
+    let mut port = current.clone();
+    port.global.vpn_server_port = vec!["4500".to_string()];
+    assert_eq!(
+        restart_required_changes(&current, &port),
+        vec!["global.vpn_server_port"]
+    );
+
+    let mut proto = current.clone();
+    proto.global.vpn_server_l4proto = vec!["udp".to_string()];
+    assert_eq!(
+        restart_required_changes(&current, &proto),
+        vec!["global.vpn_server_l4proto"]
+    );
+
+    let mut iface_addr = current.clone();
+    iface_addr.global.vpn_interface_address = vec!["10.0.0.1/32".to_string()];
+    assert_eq!(
+        restart_required_changes(&current, &iface_addr),
+        vec!["global.vpn_interface_address"]
+    );
+}
+
 /// Lazy binding only reconciles one fixed list of entries: changing either
 /// list is never applied by a reload.
 #[test]
